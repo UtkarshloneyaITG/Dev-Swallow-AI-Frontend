@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    /* Smooth theme transition */
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  body {
+    background-color: var(--page-bg, #f8fafc);
+    @apply text-slate-900 dark:text-slate-100 min-h-screen;
+    transition: background-color 0.4s ease, color 0.3s ease;
+  }
+
+  /* Sidebar picks up --sidebar-bg from the active theme */
+  aside[data-sidebar] {
+    background-color: var(--sidebar-bg, rgba(255,255,255,0.75)) !important;
+  }
+
+  /* Accent-based interactive states for themed variants */
+  .nav-active {
+    background-color: rgb(var(--accent)) !important;
+    color: rgb(var(--accent-fg)) !important;
+  }
+  .nav-active svg {
+    color: rgb(var(--accent-fg)) !important;
+  }
+
+  *, *::before, *::after {
+    transition-property: background-color, border-color, color, fill, stroke;
+    transition-timing-function: ease;
+    transition-duration: 200ms;
+  }
+
+  /* Don't animate layout transitions */
+  *[style*="transform"],
+  *[style*="opacity"] {
+    transition-property: none;
+  }
+}
+
+@layer utilities {
+  /* Theme-aware surface utilities */
+  .themed-card {
+    background-color: var(--card-bg, rgba(255,255,255,0.6));
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--card-border, rgba(0,0,0,0.05));
+  }
+
+  .themed-header {
+    background-color: var(--header-bg, rgba(255,255,255,0.4));
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--card-border, rgba(0,0,0,0.05));
+  }
+
+  .themed-input {
+    background-color: var(--input-bg, rgba(255,255,255,0.6));
+    border: 1px solid var(--input-border, rgba(0,0,0,0.1));
+  }
+
+  .themed-divider {
+    border-color: var(--card-border, rgba(0,0,0,0.05));
+  }
+
+  .glass {
+    @apply bg-white/60 backdrop-blur-md border border-white/40 dark:bg-slate-800/60 dark:border-white/10;
+  }
+
+  .glass-heavy {
+    @apply bg-white/80 backdrop-blur-xl border border-black/5 dark:bg-slate-900/80 dark:border-white/5;
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-slate-900 to-slate-600 bg-clip-text text-transparent dark:from-slate-100 dark:to-slate-400;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Dashboard walking pet */
+@keyframes pet-walk {
+  from { transform: translateX(-80px); }
+  to   { transform: translateX(calc(100vw + 80px)); }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-200 dark:bg-slate-700 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-300 dark:bg-slate-600;
+}
