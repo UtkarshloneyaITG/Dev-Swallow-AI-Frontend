@@ -19,6 +19,7 @@ export interface MigrationJob {
   status: MigrationStatus
   inputFormat: InputFormat
   totalRows: number
+  processedRows: number
   correctRows: number
   failedRows: number
   processingRows: number
@@ -51,6 +52,18 @@ export interface User {
   name: string
   email: string
   avatarInitials: string
+}
+
+export type CrawlSessionStatus = 'idle' | 'crawling' | 'stopping' | 'paused' | 'completed' | 'error'
+
+export interface StoredCrawlSession {
+  url: string
+  startedAt: string
+  status: CrawlSessionStatus
+  pagesVisited: number
+  productsScraped: number
+  elapsedSeconds: number
+  jobId?: string | null
 }
 
 export interface NewMigrationForm {

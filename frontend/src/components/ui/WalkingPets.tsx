@@ -23,7 +23,7 @@ const ALL_PETS: PetDef[] = [
   { animal: 'fox', variant: 'white', anims: WALK_ANIMS },
   // Dogs
   { animal: 'dog', variant: 'white', anims: WALK_ANIMS },
-  { animal: 'cat', variant: 'brown', anims: WALK_ANIMS },
+  // { animal: 'cat', variant: 'brown', anims: WALK_ANIMS },
   // Monkey (vscode-pets, gray variant)
   { animal: 'monkey', variant: 'gray', anims: MONKEY_ANIMS },
 ]

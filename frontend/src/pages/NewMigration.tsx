@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { usePageAnimation } from '../hooks/usePageAnimation'
 import type { ComponentType, FormEvent, DragEvent, ChangeEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { migrationApi, crawlApi } from '../services/api'
+import { migrationApi, crawlApi, storeCrawlSession } from '../services/api'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ShoppingBag,
@@ -111,6 +111,8 @@ Amara Okonkwo | amara@example.com`,
 
 export default function NewMigration() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const prefillUrl = (location.state as { prefillUrl?: string } | null)?.prefillUrl ?? ''
   const pageRef = usePageAnimation()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { user } = useAuth()
@@ -120,7 +122,7 @@ export default function NewMigration() {
   const [migrationType, setMigrationType] = useState<MigrationType>('product')
   const [inputFormat, setInputFormat] = useState<InputFormat>('json')
   const [rawData, setRawData] = useState('')
-  const [websiteUrl, setWebsiteUrl] = useState('')
+  const [websiteUrl, setWebsiteUrl] = useState(prefillUrl)
   const [googleSheetUrl, setGoogleSheetUrl] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -146,18 +148,31 @@ export default function NewMigration() {
     crawlIntervalRef.current = setInterval(async () => {
       try {
         const d = await crawlApi.getStatus()
-        setCrawlStats({
+        const stats = {
           pagesVisited:    d.pages_visited ?? 0,
           productsScraped: d.products_scraped ?? d.products_count ?? 0,
           elapsedSeconds:  d.elapsed_seconds ?? 0,
           currentUrl:      d.current_url ?? d.url ?? '',
-        })
+        }
+        setCrawlStats(stats)
         if (d.job_id) setCrawlJobId(d.job_id)
+        const nextStatus = (d.status && d.status !== crawlState) ? d.status : crawlState
         if (d.status && d.status !== crawlState) setCrawlState(d.status)
+        if (user && websiteUrl) {
+          storeCrawlSession(user.id, {
+            url:             websiteUrl,
+            startedAt:       new Date().toISOString(),
+            status:          nextStatus as import('../types').CrawlSessionStatus,
+            pagesVisited:    stats.pagesVisited,
+            productsScraped: stats.productsScraped,
+            elapsedSeconds:  stats.elapsedSeconds,
+            jobId:           d.job_id ?? null,
+          })
+        }
       } catch { /* ignore transient poll errors */ }
     }, 3000)
     return () => { if (crawlIntervalRef.current) clearInterval(crawlIntervalRef.current) }
-  }, [crawlState])
+  }, [crawlState, websiteUrl, user])
 
   // Check URL for existing session whenever URL changes
   useEffect(() => {
@@ -175,6 +190,12 @@ export default function NewMigration() {
     setUrlSession(null)
     setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '' })
     setCrawlError('')
+    if (user) {
+      storeCrawlSession(user.id, {
+        url: websiteUrl, startedAt: new Date().toISOString(),
+        status: 'crawling', pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0,
+      })
+    }
     try {
       const d = await crawlApi.start(websiteUrl, { max_pages: maxPages, max_depth: maxDepth, max_products: maxProducts })
       if (d.job_id) setCrawlJobId(d.job_id)
@@ -182,6 +203,7 @@ export default function NewMigration() {
     } catch (err) {
       setCrawlState('error')
       setCrawlError(err instanceof Error ? err.message : 'Failed to start crawl')
+      if (user) storeCrawlSession(user.id, { url: websiteUrl, startedAt: new Date().toISOString(), status: 'error', pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0 })
     }
   }
 

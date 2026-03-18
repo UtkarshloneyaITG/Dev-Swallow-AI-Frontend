@@ -8,6 +8,8 @@ export interface GridRow {
   confidenceScore: number
   data: Record<string, string>
   errorFields?: string[]
+  cellWarnings?: Record<string, string>       // col → tooltip message
+  cellSeverity?: Record<string, 'error' | 'warning'>  // col → severity
   edited?: boolean
 }
 
@@ -82,6 +84,7 @@ export default function ExcelGrid({ rows, onSave }: ExcelGridProps) {
   const [editingValue, setEditingValue] = useState<string>('')
   const [sort, setSort] = useState<SortState | null>(null)
   const [showSaveToast, setShowSaveToast] = useState(false)
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; msg: string; severity: 'error' | 'warning' } | null>(null)
 
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -387,35 +390,71 @@ export default function ExcelGrid({ rows, onSave }: ExcelGridProps) {
                       activeCell?.rowId === row.id && activeCell?.col === col
                     const cellEdited = isCellEdited(row.id, col)
                     const isErrorField = row.errorFields?.includes(col) ?? false
+                    const warningMsg = row.cellWarnings?.[col]
+                    const severity = row.cellSeverity?.[col] ?? (isErrorField ? 'error' : null)
+                    const isWarning = severity === 'warning'
                     const cellValue = getCellValue(row, col)
+
+                    // Border class
+                    const borderClass = isActive
+                      ? 'outline outline-2 outline-blue-500 z-10 border-slate-200 dark:border-slate-700'
+                      : isErrorField && !isWarning
+                        ? 'border-rose-300 dark:border-rose-700'
+                        : isErrorField && isWarning
+                          ? 'border-amber-300 dark:border-amber-600'
+                          : 'border-slate-200 dark:border-slate-700'
+
+                    // Background class
+                    const bgClass = isActive
+                      ? 'bg-white dark:bg-slate-800'
+                      : cellEdited
+                        ? 'bg-amber-50 dark:bg-amber-950/30'
+                        : isErrorField && !isWarning
+                          ? 'bg-rose-50/60 dark:bg-rose-950/30'
+                          : isErrorField && isWarning
+                            ? 'bg-amber-50/60 dark:bg-amber-950/20'
+                            : ''
+
+                    // Dot color
+                    const dotClass = isWarning
+                      ? 'bg-amber-400 dark:bg-amber-500'
+                      : 'bg-rose-400 dark:bg-rose-500'
+
+                    // Text color
+                    const textClass = isErrorField
+                      ? isWarning
+                        ? 'text-amber-700 dark:text-amber-300 font-medium'
+                        : 'text-rose-700 dark:text-rose-300 font-medium'
+                      : 'text-slate-700 dark:text-slate-300'
+
+                    const emptyClass = isErrorField
+                      ? isWarning
+                        ? 'text-amber-400 dark:text-amber-600 italic'
+                        : 'text-rose-400 dark:text-rose-600 italic'
+                      : 'text-slate-300 dark:text-slate-600 italic'
 
                     return (
                       <td
                         key={col}
                         className={[
                           'border px-0 py-0 relative cursor-text',
-                          isActive
-                            ? 'outline outline-2 outline-blue-500 z-10 border-slate-200 dark:border-slate-700'
-                            : isErrorField
-                              ? 'border-rose-300 dark:border-rose-700'
-                              : 'border-slate-200 dark:border-slate-700',
-                          isActive
-                            ? 'bg-white dark:bg-slate-800'
-                            : cellEdited
-                              ? 'bg-amber-50 dark:bg-amber-950/30'
-                              : isErrorField
-                                ? 'bg-rose-50 dark:bg-rose-950/30'
-                                : '',
+                          borderClass,
+                          bgClass,
                         ].join(' ')}
                         style={{ minWidth: '9rem' }}
                         onClick={() => handleCellClick(row, col)}
+                        onMouseEnter={warningMsg && !isActive ? (e) => {
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                          setTooltip({ x: rect.left + rect.width / 2, y: rect.top - 6, msg: warningMsg, severity: severity ?? 'error' })
+                        } : undefined}
+                        onMouseLeave={warningMsg ? () => setTooltip(null) : undefined}
                       >
-                        {/* Error field indicator */}
+                        {/* Severity dot */}
                         {isErrorField && !isActive && !cellEdited && (
-                          <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400 dark:bg-rose-500 z-10 pointer-events-none" />
+                          <span className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full ${dotClass} z-10 pointer-events-none`} />
                         )}
 
-                        {/* Edited dot indicator */}
+                        {/* Edited dot */}
                         {cellEdited && !isActive && (
                           <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400 z-10 pointer-events-none" />
                         )}
@@ -431,10 +470,8 @@ export default function ExcelGrid({ rows, onSave }: ExcelGridProps) {
                             style={{ minWidth: '9rem', minHeight: '2rem' }}
                           />
                         ) : (
-                          <span className={`block px-3 py-2 font-mono text-xs truncate max-w-xs ${isErrorField ? 'text-rose-700 dark:text-rose-300 font-medium' : 'text-slate-700 dark:text-slate-300'}`}>
-                            {cellValue || (
-                              <span className={isErrorField ? 'text-rose-400 dark:text-rose-600 italic' : 'text-slate-300 dark:text-slate-600 italic'}>—</span>
-                            )}
+                          <span className={`block px-3 py-2 font-mono text-xs truncate max-w-xs ${textClass}`}>
+                            {cellValue || <span className={emptyClass}>—</span>}
                           </span>
                         )}
                       </td>
@@ -474,6 +511,27 @@ export default function ExcelGrid({ rows, onSave }: ExcelGridProps) {
           Changes saved successfully
         </div>
       )}
+
+      {/* Cell warning tooltip — fixed position avoids scroll clipping */}
+      {tooltip && (() => {
+        const isWarn = tooltip.severity === 'warning'
+        const bg    = isWarn ? 'bg-amber-900 dark:bg-amber-950' : 'bg-rose-900 dark:bg-rose-950'
+        const text  = isWarn ? 'text-amber-100' : 'text-rose-100'
+        const dot   = isWarn ? 'bg-amber-400' : 'bg-rose-400'
+        const arrow = isWarn ? 'border-t-amber-900 dark:border-t-amber-950' : 'border-t-rose-900 dark:border-t-rose-950'
+        return (
+          <div
+            className="fixed z-[9999] pointer-events-none flex flex-col items-center"
+            style={{ left: tooltip.x, top: tooltip.y, transform: 'translateX(-50%) translateY(-100%)' }}
+          >
+            <div className={`flex items-start gap-1.5 max-w-[260px] px-3 py-2 rounded-lg ${bg} ${text} text-[11px] leading-snug shadow-lg shadow-black/30`}>
+              <span className={`mt-px flex-shrink-0 w-3 h-3 rounded-full ${dot} inline-block`} />
+              <span>{tooltip.msg}</span>
+            </div>
+            <div className={`w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent ${arrow}`} />
+          </div>
+        )
+      })()}
     </div>
   )
 }

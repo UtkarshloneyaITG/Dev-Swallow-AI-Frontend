@@ -1,9 +1,10 @@
-import type { MigrationJob, MigrationStatus, InputFormat, FailedRow } from '../types'
+import type { MigrationJob, MigrationStatus, InputFormat, FailedRow, StoredCrawlSession } from '../types'
 
 // ---------------------------------------------------------------------------
 // Base URL — set VITE_API_BASE_URL in .env
 // ---------------------------------------------------------------------------
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) ?? ''
+const API_BASE   = (import.meta.env.VITE_API_BASE_URL  as string) ?? ''
+const CRAWL_BASE = (import.meta.env.VITE_CRAWL_API_URL as string) ?? API_BASE
 
 // ---------------------------------------------------------------------------
 // Token storage
@@ -11,7 +12,8 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) ?? ''
 const ACCESS_KEY  = 'swallow_access_token'
 const REFRESH_KEY = 'swallow_refresh_token'
 const USER_KEY    = 'swallow_user'
-const JOBS_PREFIX = 'swallow_jobs_'
+const JOBS_PREFIX   = 'swallow_jobs_'
+const CRAWLS_PREFIX = 'swallow_crawls_'
 
 export function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_KEY)
@@ -49,6 +51,32 @@ export function getStoredJobIds(userId: string): string[] {
   } catch {
     return []
   }
+}
+
+// ---------------------------------------------------------------------------
+// Crawl session cache — persists recent scraping sessions per user
+// ---------------------------------------------------------------------------
+export function storeCrawlSession(userId: string, session: StoredCrawlSession): void {
+  const key = `${CRAWLS_PREFIX}${userId}`
+  const sessions: StoredCrawlSession[] = JSON.parse(localStorage.getItem(key) ?? '[]')
+  const idx = sessions.findIndex((s) => s.url === session.url)
+  if (idx >= 0) sessions[idx] = session
+  else sessions.unshift(session)
+  localStorage.setItem(key, JSON.stringify(sessions.slice(0, 20)))
+}
+
+export function getStoredCrawlSessions(userId: string): StoredCrawlSession[] {
+  try {
+    return JSON.parse(localStorage.getItem(`${CRAWLS_PREFIX}${userId}`) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+export function removeCrawlSession(userId: string, url: string): void {
+  const key = `${CRAWLS_PREFIX}${userId}`
+  const sessions: StoredCrawlSession[] = JSON.parse(localStorage.getItem(key) ?? '[]')
+  localStorage.setItem(key, JSON.stringify(sessions.filter((s) => s.url !== url)))
 }
 
 // ---------------------------------------------------------------------------
@@ -126,24 +154,28 @@ function mapBackendJobStatus(s: string): MigrationStatus {
 
 function mapJob(raw: Record<string, unknown>): MigrationJob {
   // total_rows can be 0 right after creation — fall back to raw_records count
-  const rawRecords    = Array.isArray(raw.raw_records) ? (raw.raw_records as unknown[]) : []
-  const storedTotal   = (raw.total_rows as number) ?? 0
-  const totalRows     = storedTotal > 0 ? storedTotal : rawRecords.length
+  const rawRecords  = Array.isArray(raw.raw_records) ? (raw.raw_records as unknown[]) : []
+  const storedTotal = (raw.total_rows as number) ?? 0
+  const totalRows   = Math.max(storedTotal > 0 ? storedTotal : rawRecords.length, 0)
+  const safeTotal   = Math.max(totalRows, 1) // avoid division by zero
 
-  const correctRows   = (raw.correct_rows   as number) ?? 0
-  const failedRows    = (raw.failed_rows    as number) ?? 0
-  const retryRows     = (raw.retry_rows     as number) ?? 0
-  const processedRows = (raw.processed_rows as number) ?? 0
+  // Clamp all counters so nothing exceeds totalRows
+  const correctRows   = Math.min(Math.max((raw.correct_rows   as number) ?? 0, 0), totalRows)
+  const failedRows    = Math.min(Math.max((raw.failed_rows    as number) ?? 0, 0), totalRows - correctRows)
+  const retryRows     = Math.max((raw.retry_rows     as number) ?? 0, 0)
+  const processedRows = Math.min(Math.max((raw.processed_rows as number) ?? 0, 0), totalRows)
 
-  // progress_pct comes from /status endpoint; derive from counts when absent
-  const progress = raw.progress_pct != null
+  // progress_pct comes from /status endpoint; derive from counts when absent — clamp to 100
+  const rawProgress = raw.progress_pct != null
     ? Math.round(raw.progress_pct as number)
-    : totalRows > 0
-      ? Math.round((processedRows / totalRows) * 100)
-      : 0
+    : Math.round((processedRows / safeTotal) * 100)
+  const progress = Math.min(rawProgress, 100)
 
-  // processingRows = rows not yet finished (pending + retry)
-  const processingRows = Math.max(0, totalRows - correctRows - failedRows) + retryRows
+  // processingRows = rows currently in-flight (processed but not yet finalized)
+  const processingRows = Math.min(
+    Math.max(0, processedRows - correctRows - failedRows) + retryRows,
+    totalRows - correctRows - failedRows
+  )
 
   return {
     id:            (raw._id ?? raw.id) as string,
@@ -152,6 +184,7 @@ function mapJob(raw: Record<string, unknown>): MigrationJob {
     status:        mapBackendJobStatus((raw.status as string) ?? 'pending'),
     inputFormat:   ((raw.input_type ?? raw.input_format ?? 'json') as InputFormat),
     totalRows,
+    processedRows,
     correctRows,
     failedRows,
     processingRows,
@@ -342,6 +375,10 @@ export const migrationApi = {
     return request(`/api/v1/migration/${jobId}/stop`, { method: 'POST' })
   },
 
+  async deleteJob(jobId: string): Promise<void> {
+    return request(`/api/v1/migration/${jobId}`, { method: 'DELETE' })
+  },
+
   async aiRetry(rowId: string): Promise<void> {
     return request(`/api/v1/migration/row/${rowId}/ai-retry`, { method: 'POST' })
   },
@@ -358,7 +395,26 @@ export const migrationApi = {
 // Crawl API — mirrors sample_scraper.py backend contract
 // Endpoints: POST /crawl/start  POST /crawl/stop  POST /crawl/resume
 //            GET  /crawl/status  GET /crawl/session?url=...
+// Uses VITE_CRAWL_API_URL as base (falls back to VITE_API_BASE_URL)
 // ---------------------------------------------------------------------------
+async function crawlRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getAccessToken()
+  const res = await fetch(`${CRAWL_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'ngrok-skip-browser-warning': 'true',
+      ...options.headers,
+    },
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(String(body.detail ?? `Crawl API error ${res.status}`))
+  }
+  if (res.status === 204) return undefined as unknown as T
+  return res.json() as Promise<T>
+}
 export interface CrawlStatusResponse {
   status: 'idle' | 'crawling' | 'stopping' | 'paused' | 'completed' | 'error'
   pages_visited: number
@@ -388,25 +444,25 @@ export const crawlApi = {
       max_depth:    String(params.max_depth    ?? 5),
       max_products: String(params.max_products ?? 0),
     })
-    return request(`/crawl/start?${qs}`, { method: 'POST' })
+    return crawlRequest(`/crawl/start?${qs}`, { method: 'POST' })
   },
 
   async stop(): Promise<{ status: string }> {
-    return request('/crawl/stop', { method: 'POST' })
+    return crawlRequest('/crawl/stop', { method: 'POST' })
   },
 
   async resume(url: string): Promise<{ status: string; job_id?: string }> {
     const qs = new URLSearchParams({ url })
-    return request(`/crawl/resume?${qs}`, { method: 'POST' })
+    return crawlRequest(`/crawl/resume?${qs}`, { method: 'POST' })
   },
 
   async getStatus(): Promise<CrawlStatusResponse> {
-    return request('/crawl/status')
+    return crawlRequest('/crawl/status')
   },
 
   async getSession(url: string): Promise<CrawlSessionResponse> {
     const qs = new URLSearchParams({ url })
-    return request(`/crawl/session?${qs}`)
+    return crawlRequest(`/crawl/session?${qs}`)
   },
 }
 

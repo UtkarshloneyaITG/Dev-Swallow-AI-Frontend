@@ -12,10 +12,10 @@ import {
   Download,
   Table,
   Square,
+  RotateCcw,
 } from 'lucide-react'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
-import ProgressBar from '../components/ui/ProgressBar'
 import StatCard from '../components/migration/StatCard'
 import type { MigrationJob } from '../types'
 import { migrationApi } from '../services/api'
@@ -28,6 +28,8 @@ export default function JobProgress() {
 
   const [job, setJob] = useState<MigrationJob | null>(null)
   const [stopping, setStopping] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Initial load
@@ -49,6 +51,7 @@ export default function JobProgress() {
           status:        s.status,
           progress:      s.progress,
           totalRows:     s.totalRows  || prev.totalRows,
+          processedRows: s.processedRows,
           correctRows:   s.correctRows,
           failedRows:    s.failedRows,
           processingRows:s.processingRows,
@@ -68,6 +71,38 @@ export default function JobProgress() {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
   }, [job?.status])
+
+  async function handleRestart() {
+    if (!jobId || restarting) return
+    setRestarting(true)
+    try {
+      await migrationApi.retry(jobId)
+      const refreshed = await migrationApi.getJob(jobId)
+      setJob(refreshed)
+    } catch (err) {
+      console.error('Restart failed:', err)
+    } finally {
+      setRestarting(false)
+    }
+  }
+
+  async function handleRetry() {
+    if (!jobId || retrying) return
+    setRetrying(true)
+    try {
+      // Fetch only the failed rows for this job
+      const failedRows = await migrationApi.getRows(jobId, { status: 'failed' })
+      // Fire ai-retry for each failed row individually
+      await Promise.allSettled(failedRows.map((row) => migrationApi.aiRetry(row.id)))
+      // Re-fetch full job so status + counters reflect the new run
+      const refreshed = await migrationApi.getJob(jobId)
+      setJob(refreshed)
+    } catch (err) {
+      console.error('Retry failed:', err)
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   async function handleStop() {
     if (!jobId || stopping) return
@@ -98,8 +133,20 @@ export default function JobProgress() {
   const isLive = job.status === 'processing'
   const isDone = job.status === 'completed'
 
-  const progressColor =
-    isDone ? 'emerald' : isLive ? 'amber' : 'slate'
+  // Data is already clamped in mapJob — just alias for readability
+  const total          = Math.max(job.totalRows, 1)
+  const processedRows  = job.processedRows
+  const correctRows    = job.correctRows
+  const failedRows     = job.failedRows
+  const processingRows = job.processingRows
+
+  // Two-phase progress: phase 1 = processing (0→50%), phase 2 = correction (50→100%)
+  const phase1Pct   = Math.min((processedRows / total) * 50, 50)
+  const phase2Pct   = Math.min(((correctRows + failedRows) / total) * 50, 50)
+  const combinedPct = Math.min(Math.round(phase1Pct + phase2Pct), 100)
+
+  const isPhase2 = isLive && processedRows >= total
+  const isPhase1 = isLive && !isPhase2
 
   return (
     <div ref={pageRef} className="min-h-screen px-8 py-10">
@@ -167,26 +214,66 @@ export default function JobProgress() {
         {/* Progress bar section */}
         <div className="themed-card rounded-2xl p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
-            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-              {isDone ? 'Migration complete' : isLive ? 'Migration in progress…' : 'Queued'}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                {isDone
+                  ? 'Migration complete'
+                  : isPhase2
+                  ? 'Phase 2 · Cleaning & correcting…'
+                  : isLive
+                  ? 'Phase 1 · Processing rows…'
+                  : 'Queued'}
+              </span>
+              {isLive && (
+                <span className="text-xs text-slate-400 dark:text-slate-500">
+                  ({isPhase2 ? 'correction' : 'processing'})
+                </span>
+              )}
+            </div>
             <span className="text-2xl font-light text-slate-800 dark:text-slate-200 tabular-nums">
-              {job.progress}%
+              {combinedPct}%
             </span>
           </div>
-          <ProgressBar
-            value={job.progress}
-            color={progressColor}
-            size="lg"
-            animated={isLive}
-          />
-          <div className="flex items-center justify-between mt-3">
+
+          {/* Two-segment bar: amber = phase 1 (0→50%), emerald = phase 2 (50→100%) */}
+          <div className="relative w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+            {/* Phase 1: Processing (amber) */}
+            <motion.div
+              className={`absolute left-0 top-0 h-full rounded-full bg-amber-500 ${isPhase1 ? 'after:absolute after:inset-0 after:bg-gradient-to-r after:from-transparent after:via-white/30 after:to-transparent' : ''}`}
+              animate={{ width: `${phase1Pct}%` }}
+              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+            />
+            {/* Phase 2: Correction (emerald) */}
+            <motion.div
+              className={`absolute top-0 h-full rounded-r-full bg-emerald-500 ${isPhase2 ? 'after:absolute after:inset-0 after:bg-gradient-to-r after:from-transparent after:via-white/30 after:to-transparent' : ''}`}
+              animate={{ left: `${phase1Pct}%`, width: `${phase2Pct}%` }}
+              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+            />
+          </div>
+
+          {/* Phase labels */}
+          <div className="flex items-center justify-between mt-2 mb-1">
+            <div className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                Processing · {processedRows}/{total}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                Corrected · {correctRows + failedRows}/{total}
+              </span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between mt-1">
             <span className="text-xs text-slate-400 dark:text-slate-500">
-              {job.correctRows + job.failedRows} / {job.totalRows} rows processed
+              {processedRows} / {total} rows processed
             </span>
             {isLive && (
               <span className="text-xs text-slate-400 dark:text-slate-500">
-                ~{Math.max(0, Math.ceil((job.totalRows - job.correctRows - job.failedRows) / 8))} seconds remaining
+                ~{Math.max(0, Math.ceil((total - processedRows) / 8))} seconds remaining
               </span>
             )}
           </div>
@@ -196,30 +283,30 @@ export default function JobProgress() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
           <StatCard
             label="Total"
-            value={job.totalRows}
+            value={total}
             icon={<Hash className="w-4 h-4" />}
             color="slate"
             delay={0.05}
           />
           <StatCard
             label="Correct"
-            value={job.correctRows}
+            value={correctRows}
             icon={<CheckCircle2 className="w-4 h-4" />}
             color="emerald"
-            sublabel={job.totalRows > 0 ? `${Math.round((job.correctRows / job.totalRows) * 100)}%` : undefined}
+            sublabel={`${Math.round((correctRows / total) * 100)}%`}
             delay={0.1}
           />
           <StatCard
             label="Failed"
-            value={job.failedRows}
+            value={failedRows}
             icon={<XCircle className="w-4 h-4" />}
             color="rose"
-            sublabel={job.failedRows > 0 ? 'needs review' : 'none so far'}
+            sublabel={failedRows > 0 ? 'needs review' : 'none so far'}
             delay={0.15}
           />
           <StatCard
             label="Processing"
-            value={job.processingRows}
+            value={processingRows}
             icon={<Clock className="w-4 h-4" />}
             color="amber"
             sublabel={isLive ? 'in queue' : 'done'}
@@ -244,19 +331,39 @@ export default function JobProgress() {
                   Migration completed successfully
                 </h3>
                 <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
-                  {job.correctRows} records imported · {job.failedRows} records need attention
+                  {correctRows} records imported · {failedRows} records need attention
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              {job.failedRows > 0 && (
+            <div className="flex items-center gap-3 flex-wrap">
+              {failedRows > 0 && (
+                <Button
+                  variant="primary"
+                  size="md"
+                  icon={<RotateCcw className="w-4 h-4" />}
+                  loading={retrying}
+                  onClick={handleRetry}
+                >
+                  {retrying ? 'Retrying…' : `Retry Failed (${failedRows})`}
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                size="md"
+                icon={<RotateCcw className="w-4 h-4" />}
+                loading={restarting}
+                onClick={handleRestart}
+              >
+                {restarting ? 'Restarting…' : 'Full Restart'}
+              </Button>
+              {failedRows > 0 && (
                 <Button
                   variant="danger"
                   size="md"
                   icon={<AlertTriangle className="w-4 h-4" />}
                   onClick={() => navigate(`/jobs/${job.id}/failed`)}
                 >
-                  View Failed Rows ({job.failedRows})
+                  View Failed Rows
                 </Button>
               )}
               <Button
@@ -280,7 +387,7 @@ export default function JobProgress() {
         )}
 
         {/* Failed rows hint when processing */}
-        {isLive && job.failedRows > 0 && (
+        {isLive && failedRows > 0 && (
           <motion.div
             className="bg-rose-50 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900/50 rounded-2xl p-4 flex items-center gap-3"
             initial={{ opacity: 0 }}
@@ -288,8 +395,70 @@ export default function JobProgress() {
           >
             <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
             <p className="text-xs text-rose-700 dark:text-rose-400">
-              <span className="font-semibold">{job.failedRows} rows failed</span> so far. You can review them after migration completes.
+              <span className="font-semibold">{failedRows} rows failed</span> so far. You can review them after migration completes.
             </p>
+          </motion.div>
+        )}
+
+        {/* Failed state */}
+        {job.status === 'failed' && (
+          <motion.div
+            className="bg-rose-50 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900/50 rounded-2xl p-6"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <div className="flex items-start gap-3 mb-5">
+              <div className="p-2 bg-rose-100 dark:bg-rose-900/40 rounded-xl">
+                <XCircle className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-rose-800 dark:text-rose-300">
+                  Migration stopped or failed
+                </h3>
+                <p className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">
+                  {correctRows} records imported · {failedRows} records failed. Retry to reprocess failed rows.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <Button
+                variant="primary"
+                size="md"
+                icon={<RotateCcw className="w-4 h-4" />}
+                loading={retrying}
+                onClick={handleRetry}
+              >
+                {retrying ? 'Retrying…' : 'Retry Failed Rows'}
+              </Button>
+              <Button
+                variant="secondary"
+                size="md"
+                icon={<RotateCcw className="w-4 h-4" />}
+                loading={restarting}
+                onClick={handleRestart}
+              >
+                {restarting ? 'Restarting…' : 'Full Restart'}
+              </Button>
+              {failedRows > 0 && (
+                <Button
+                  variant="secondary"
+                  size="md"
+                  icon={<AlertTriangle className="w-4 h-4" />}
+                  onClick={() => navigate(`/jobs/${job.id}/failed`)}
+                >
+                  View Failed Rows
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                size="md"
+                icon={<Table className="w-4 h-4" />}
+                onClick={() => navigate(`/jobs/${job.id}/results`)}
+              >
+                View Results Grid
+              </Button>
+            </div>
           </motion.div>
         )}
 

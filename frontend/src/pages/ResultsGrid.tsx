@@ -115,13 +115,65 @@ function rowsToGridRows(rows: FailedRow[]): GridRow[] {
 
   const csvRows = toCSVRows(expanded.map((p) => p.data))
 
-  return expanded.map(({ row }, idx) => ({
-    id: `${row.id}_${idx}`,
-    rowIndex: idx + 1,
-    status: row.status === 'resolved' ? 'correct' : 'failed',
-    confidenceScore: row.confidenceScore,
-    data: csvRows[idx],
-  }))
+  return expanded.map(({ row }, idx) => {
+    const isFailed = row.status !== 'resolved'
+    const dataRecord = csvRows[idx]
+
+    // Detect error fields and severity
+    const errorFields: string[] = []
+    const cellWarnings: Record<string, string> = {}
+    const cellSeverity: Record<string, 'error' | 'warning'> = {}
+
+    if (isFailed) {
+      const baseMsg = row.errorMessage?.trim()
+
+      // Empty/blank cells → warning severity
+      for (const [col, v] of Object.entries(dataRecord)) {
+        if (v === '' || v === null || v === undefined) {
+          errorFields.push(col)
+          cellSeverity[col] = 'warning'
+          cellWarnings[col] = `"${col.replace(/_/g, ' ')}" is empty or missing`
+        }
+      }
+
+      // Fields explicitly mentioned in errorMessage → error severity (overrides warning)
+      if (baseMsg) {
+        for (const col of Object.keys(dataRecord)) {
+          if (baseMsg.toLowerCase().includes(col.replace(/_/g, ' '))) {
+            cellWarnings[col] = baseMsg
+            cellSeverity[col] = 'error'
+            if (!errorFields.includes(col)) errorFields.push(col)
+          }
+        }
+      }
+
+      // Backend field_errors / validation_errors — use severity from backend if present
+      const rawRow = row as unknown as Record<string, unknown>
+      const fieldErrors = (rawRow.field_errors ?? rawRow.validation_errors) as
+        | Record<string, { message?: string; severity?: string } | string>
+        | undefined
+      if (fieldErrors) {
+        for (const [col, info] of Object.entries(fieldErrors)) {
+          const msg    = typeof info === 'string' ? info : (info.message ?? '')
+          const sev    = typeof info === 'string' ? 'error' : ((info.severity === 'warning' ? 'warning' : 'error') as 'error' | 'warning')
+          cellWarnings[col] = msg || cellWarnings[col] || `"${col.replace(/_/g, ' ')}" has an issue`
+          cellSeverity[col] = sev
+          if (!errorFields.includes(col)) errorFields.push(col)
+        }
+      }
+    }
+
+    return {
+      id: `${row.id}_${idx}`,
+      rowIndex: idx + 1,
+      status: row.status === 'resolved' ? 'correct' as const : 'failed' as const,
+      confidenceScore: row.confidenceScore,
+      data: dataRecord,
+      errorFields: errorFields.length > 0 ? errorFields : undefined,
+      cellWarnings: Object.keys(cellWarnings).length > 0 ? cellWarnings : undefined,
+      cellSeverity: Object.keys(cellSeverity).length > 0 ? cellSeverity : undefined,
+    }
+  })
 }
 
 function rawRecordsToGridRows(records: Record<string, unknown>[]): GridRow[] {

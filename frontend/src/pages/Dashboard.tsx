@@ -2,23 +2,43 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { usePageAnimation } from '../hooks/usePageAnimation'
-import { Plus, TrendingUp, CheckCircle2, Clock, AlertCircle } from 'lucide-react'
+import { Plus, TrendingUp, CheckCircle2, Clock, AlertCircle, Globe } from 'lucide-react'
 import Button from '../components/ui/Button'
 import JobCard from '../components/migration/JobCard'
+import CrawlCard from '../components/migration/CrawlCard'
 import { useAuth } from '../context/AuthContext'
-import { migrationApi } from '../services/api'
-import type { MigrationJob } from '../types'
+import { migrationApi, getStoredCrawlSessions, removeCrawlSession } from '../services/api'
+import type { MigrationJob, StoredCrawlSession } from '../types'
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const [jobs, setJobs] = useState<MigrationJob[]>([])
+  const [crawls, setCrawls] = useState<StoredCrawlSession[]>([])
+  const [activeTab, setActiveTab] = useState<'all' | 'migrations' | 'crawls'>('all')
+
   useEffect(() => {
     if (!user) return
-    migrationApi.listJobs(user.id)
-      .then(setJobs)
-      .catch(console.error)
+    migrationApi.listJobs(user.id).then(setJobs).catch(console.error)
+    setCrawls(getStoredCrawlSessions(user.id))
   }, [user])
+
+  function handleDeleteCrawl(url: string) {
+    if (!user) return
+    setCrawls((prev) => prev.filter((s) => s.url !== url))
+    removeCrawlSession(user.id, url)
+  }
+
+  async function handleDeleteJob(id: string) {
+    setJobs((prev) => prev.filter((j) => j.id !== id))
+    try {
+      await migrationApi.deleteJob(id)
+    } catch (err) {
+      console.error('Delete failed:', err)
+      // Re-fetch to restore state if delete failed
+      if (user) migrationApi.listJobs(user.id).then(setJobs).catch(console.error)
+    }
+  }
 
   const totalJobs = jobs.length
   const completedJobs = jobs.filter((j) => j.status === 'completed').length
@@ -59,7 +79,7 @@ export default function Dashboard() {
           <Button
             variant="primary"
             size="md"
-            icon={<Plus className="w-4 h-4" />}
+            // icon={<Plus className="w-4 h-4" />}
             onClick={() => navigate('/new-migration')}
           >
             New Migration
@@ -116,44 +136,62 @@ export default function Dashboard() {
         </div>{/* /max-w-6xl mx-auto */}
       </motion.div>
 
-      {/* Jobs list */}
+      {/* Recent activity */}
       <div className="px-8 py-6 max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              Recent Jobs
+              Recent Activity
             </h2>
             <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
-              Click any job to view progress and details
+              {activeTab === 'crawls' ? 'Click any crawl to resume or use its data' : 'Click any job to view progress and details'}
             </p>
           </div>
 
-          {/* Filter tabs */}
+          {/* Tabs */}
           <div className="bg-black/5 dark:bg-white/5 p-1 rounded-full flex gap-0.5 ml-auto">
-            {['All', 'Active', 'Done'].map((tab) => (
+            {([
+              { key: 'all',        label: 'All',        count: jobs.length + crawls.length },
+              { key: 'migrations', label: 'Migrations', count: jobs.length },
+              { key: 'crawls',     label: 'Crawls',     count: crawls.length },
+            ] as const).map(({ key, label, count }) => (
               <button
-                key={tab}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-all duration-150 ${
-                  tab === 'All'
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all duration-150 ${
+                  activeTab === key
                     ? 'bg-[rgb(var(--accent,_0_0_0))] text-[rgb(var(--accent-fg,_255_255_255))] shadow-sm'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                 }`}
               >
-                {tab}
+                {label}
+                {count > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums ${
+                    activeTab === key
+                      ? 'bg-white/20 text-[rgb(var(--accent-fg,_255_255_255))]'
+                      : 'bg-black/8 dark:bg-white/8 text-slate-500 dark:text-slate-400'
+                  }`}>
+                    {count}
+                  </span>
+                )}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Job cards */}
+        {/* Cards */}
         <div className="space-y-3">
-          {jobs.map((job, i) => (
-            <JobCard key={job.id} job={job} index={i} />
-          ))}
+          {(activeTab === 'all' || activeTab === 'migrations') &&
+            jobs.map((job, i) => <JobCard key={job.id} job={job} index={i} onDelete={handleDeleteJob} />)}
+
+          {(activeTab === 'all' || activeTab === 'crawls') &&
+            crawls.map((session, i) => (
+              <CrawlCard key={session.url + session.startedAt} session={session} index={activeTab === 'all' ? jobs.length + i : i} onDelete={handleDeleteCrawl} />
+            ))}
         </div>
 
-        {/* Empty state (hidden when jobs exist) */}
-        {jobs.length === 0 && (
+        {/* Empty state */}
+        {jobs.length === 0 && crawls.length === 0 && (
           <motion.div
             className="flex flex-col items-center justify-center py-20 text-center"
             initial={{ opacity: 0 }}
@@ -163,17 +201,52 @@ export default function Dashboard() {
               <TrendingUp className="w-5 h-5 text-slate-400 dark:text-slate-500" />
             </div>
             <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              No migrations yet
+              No activity yet
             </h3>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mb-5 max-w-xs">
+              Start a crawl to scrape a store, or create a migration job to import data.
+            </p>
+            <Button variant="primary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/new-migration')}>
+              Get started
+            </Button>
+          </motion.div>
+        )}
+
+        {/* Crawls-only empty state */}
+        {activeTab === 'crawls' && crawls.length === 0 && (
+          <motion.div
+            className="flex flex-col items-center justify-center py-16 text-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            <div className="w-12 h-12 rounded-2xl bg-sky-50 dark:bg-sky-900/30 flex items-center justify-center mb-4">
+              <Globe className="w-5 h-5 text-sky-400" />
+            </div>
+            <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">No crawls yet</h3>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mb-5 max-w-xs">
+              Use the website crawler in New Migration to scrape product data from any store URL.
+            </p>
+            <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/new-migration')}>
+              Start crawling
+            </Button>
+          </motion.div>
+        )}
+
+        {/* Migrations-only empty state */}
+        {activeTab === 'migrations' && jobs.length === 0 && (
+          <motion.div
+            className="flex flex-col items-center justify-center py-16 text-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-4">
+              <TrendingUp className="w-5 h-5 text-slate-400 dark:text-slate-500" />
+            </div>
+            <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">No migrations yet</h3>
             <p className="text-xs text-slate-400 dark:text-slate-500 mb-5 max-w-xs">
               Create your first migration job to start importing Shopify data.
             </p>
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Plus className="w-4 h-4" />}
-              onClick={() => navigate('/new-migration')}
-            >
+            <Button variant="primary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/new-migration')}>
               Start migrating
             </Button>
           </motion.div>
