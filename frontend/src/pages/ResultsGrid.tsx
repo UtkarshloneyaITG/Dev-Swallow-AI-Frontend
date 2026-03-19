@@ -147,19 +147,13 @@ function rowsToGridRows(rows: FailedRow[]): GridRow[] {
         }
       }
 
-      // Backend field_errors / validation_errors — use severity from backend if present
-      const rawRow = row as unknown as Record<string, unknown>
-      const fieldErrors = (rawRow.field_errors ?? rawRow.validation_errors) as
-        | Record<string, { message?: string; severity?: string } | string>
-        | undefined
-      if (fieldErrors) {
-        for (const [col, info] of Object.entries(fieldErrors)) {
-          const msg    = typeof info === 'string' ? info : (info.message ?? '')
-          const sev    = typeof info === 'string' ? 'error' : ((info.severity === 'warning' ? 'warning' : 'error') as 'error' | 'warning')
-          cellWarnings[col] = msg || cellWarnings[col] || `"${col.replace(/_/g, ' ')}" has an issue`
-          cellSeverity[col] = sev
-          if (!errorFields.includes(col)) errorFields.push(col)
-        }
+      // Backend validation_errors from migration_rows collection
+      // loc uses dot-notation (e.g. "seo.title") — convert to flat key ("seo_title")
+      for (const ve of row.validationErrors) {
+        const col = (ve.loc || ve.field).replace(/\./g, '_')
+        cellWarnings[col] = ve.msg || cellWarnings[col] || `"${col.replace(/_/g, ' ')}" has an issue`
+        cellSeverity[col] = ve.severity
+        if (!errorFields.includes(col)) errorFields.push(col)
       }
     }
 
@@ -228,18 +222,20 @@ function exportToShopifyCSV(rawRows: FailedRow[]) {
   for (const row of rawRows) {
     const p = row.originalData as Record<string, unknown>
 
-    const handle       = String(p.handle ?? '')
-    const title        = String(p.title ?? '')
-    const bodyHtml     = String(p.body_html ?? '')
-    const vendor       = String(p.vendor ?? '')
-    const prodCategory = String(p.category ?? p.product_type ?? '')
-    const prodType     = String(p.product_type ?? '')
-    const tags         = Array.isArray(p.tags) ? (p.tags as unknown[]).join(', ') : String(p.tags ?? '')
-    const published    = shopifyBool((p.status as string) === 'active' || p.published)
-    const status       = String(p.status ?? '')
+    // Support both cleaned_data/final_result (snake_case) and original_data (Shopify CSV capitalized keys)
+    const handle       = String(p.handle       ?? p['Handle']       ?? '')
+    const title        = String(p.title        ?? p['Title']        ?? '')
+    const bodyHtml     = String(p.body_html    ?? p['Body (HTML)']  ?? '')
+    const vendor       = String(p.vendor       ?? p['Vendor']       ?? '')
+    const prodCategory = String(p.category     ?? p['Product Category'] ?? p.product_type ?? p['Type'] ?? '')
+    const prodType     = String(p.product_type ?? p['Type']         ?? '')
+    const rawTags      = p.tags ?? p['Tags']
+    const tags         = Array.isArray(rawTags) ? (rawTags as unknown[]).join(', ') : String(rawTags ?? '')
+    const published    = shopifyBool((p.status as string) === 'active' || p.published || p['Published'])
+    const status       = String(p.status ?? p['Status'] ?? '')
     const seo          = (p.seo as Record<string, unknown>) ?? {}
-    const seoTitle     = String(seo.title ?? '')
-    const seoDesc      = String(seo.description ?? '')
+    const seoTitle     = String(seo.title ?? p['SEO Title'] ?? '')
+    const seoDesc      = String(seo.description ?? p['SEO Description'] ?? '')
 
     const options  = Array.isArray(p.options)  ? p.options  as Array<Record<string, unknown>> : []
     const variants = Array.isArray(p.variants) && (p.variants as unknown[]).length > 0
@@ -247,9 +243,10 @@ function exportToShopifyCSV(rawRows: FailedRow[]) {
       : [{}]
     const images   = Array.isArray(p.images)   ? p.images   as Array<Record<string, unknown>> : []
 
-    const opt1Name = String(options[0]?.name ?? '')
-    const opt2Name = String(options[1]?.name ?? '')
-    const opt3Name = String(options[2]?.name ?? '')
+    // Option names come from the options[].name array; fall back to original_data Option1/2/3 Name columns
+    const opt1Name = String(options[0]?.name ?? p['Option1 Name'] ?? '')
+    const opt2Name = String(options[1]?.name ?? p['Option2 Name'] ?? '')
+    const opt3Name = String(options[2]?.name ?? p['Option3 Name'] ?? '')
 
     const numRows = Math.max(variants.length, images.length, 1)
 
@@ -413,8 +410,7 @@ export default function ResultsGrid() {
   const correctCount = rows.filter((r) => r.status === 'correct').length
   const failedCount = rows.filter((r) => r.status === 'failed').length
 
-  // Use the product title from the first row's data, fall back to job name
-  const pageTitle = rows[0]?.data?.title || job?.name || 'Migration Results'
+  const pageTitle = job?.name || 'Migration Results'
 
   const [showExportModal, setShowExportModal] = useState(false)
 
@@ -625,7 +621,7 @@ export default function ResultsGrid() {
 
       {/* Grid — fills remaining vertical space */}
       <motion.div
-        className="flex-1 min-h-0"
+        className="flex-1 min-h-0 flex flex-col"
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}

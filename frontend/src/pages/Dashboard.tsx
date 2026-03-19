@@ -70,7 +70,7 @@ export default function Dashboard() {
               Overview
             </p>
             <h1 className="text-3xl font-light tracking-tight text-black dark:text-white">
-              Good morning, {user?.name.split(' ')[0] ?? 'there'}
+              Hello, {user?.name.split(' ')[0] ?? 'there'}
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 font-light mt-1">
               {totalJobs} migration job{totalJobs !== 1 ? 's' : ''} · {processingJobs > 0 ? `${processingJobs} running` : 'all quiet'}
@@ -79,7 +79,7 @@ export default function Dashboard() {
           <Button
             variant="primary"
             size="md"
-            // icon={<Plus className="w-4 h-4" />}
+            icon={<Plus className="w-4 h-4" />}
             onClick={() => navigate('/new-migration')}
           >
             New Migration

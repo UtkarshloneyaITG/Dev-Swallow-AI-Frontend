@@ -212,20 +212,33 @@ function mapRow(raw: Record<string, unknown>, rowIndex = 0): FailedRow {
     (originalData ?? {})
 
   let mappedStatus: FailedRow['status']
-  if (status === 'correct')                      mappedStatus = 'resolved'
-  else if (status === 'retry')                   mappedStatus = 'retrying'
-  else if (status === 'pending' || status === 'processing') mappedStatus = 'retrying'
-  else                                           mappedStatus = 'failed'
+  if (status === 'correct')                                                   mappedStatus = 'resolved'
+  else if (status === 'extracted' || status === 'retry'
+        || status === 'pending'   || status === 'processing')                 mappedStatus = 'retrying'
+  else                                                                        mappedStatus = 'failed'
+
+  // Map validation_errors array from DB → typed ValidationError[]
+  const rawValidationErrors = Array.isArray(raw.validation_errors)
+    ? (raw.validation_errors as Record<string, unknown>[])
+    : []
+  const validationErrors: FailedRow['validationErrors'] = rawValidationErrors.map((ve) => ({
+    field:    String(ve.field    ?? ''),
+    loc:      String(ve.loc      ?? ve.field ?? ''),
+    severity: (ve.severity === 'warning' ? 'warning' : 'error') as 'error' | 'warning',
+    msg:      String(ve.msg      ?? ''),
+    got:      ve.got,
+  }))
 
   return {
-    id:             (raw._id ?? raw.id) as string,
-    jobId:          raw.job_id as string,
+    id:               (raw._id ?? raw.id) as string,
+    jobId:            raw.job_id as string,
     rowIndex,
-    originalData:   displayData,
-    errorMessage:   (raw.error_message ?? '') as string,
-    confidenceScore:(raw.confidence_score ?? 0) as number,
-    attempts:       (raw.iteration ?? 1) as number,
-    status:         mappedStatus,
+    originalData:     displayData,
+    errorMessage:     (raw.error_message ?? '') as string,
+    confidenceScore:  (raw.confidence_score ?? 0) as number,
+    attempts:         (raw.iteration ?? 1) as number,
+    status:           mappedStatus,
+    validationErrors,
   }
 }
 

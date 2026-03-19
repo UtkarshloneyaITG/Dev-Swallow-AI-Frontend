@@ -29,6 +29,15 @@ export interface MigrationJob {
   completedAt?: string
 }
 
+// Mirrors the validation_errors[] items in the migration_rows collection
+export interface ValidationError {
+  field: string               // e.g. "title"
+  loc: string                 // dot-path e.g. "seo.title" — convert to "seo_title" for grid columns
+  severity: 'error' | 'warning'
+  msg: string
+  got?: unknown
+}
+
 export interface FailedRow {
   id: string
   jobId: string
@@ -38,6 +47,7 @@ export interface FailedRow {
   confidenceScore: number // 0-1
   attempts: number
   status: 'failed' | 'retrying' | 'resolved'
+  validationErrors: ValidationError[]
 }
 
 export interface ExportRecord {

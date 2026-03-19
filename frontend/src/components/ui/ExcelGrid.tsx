@@ -31,20 +31,23 @@ interface SortState {
 // Derive ordered column keys from all rows (union of all data keys).
 // Columns are sorted to match Shopify's product CSV field order.
 // Any extra fields not in the list appear at the end.
+// Column order mirrors Shopify product CSV structure, using the snake_case keys
+// present in migration_rows.cleaned_data / final_result after flattenRecord()
 const SHOPIFY_COL_ORDER = [
-  // Product-level
-  'handle', 'title', 'body_html', 'vendor', 'category', 'product_type', 'tags', 'published', 'status',
-  // Options
+  // Product-level (status = "active"|"draft"|"archived" replaces boolean published)
+  'handle', 'title', 'body_html', 'vendor', 'category', 'product_type', 'tags', 'status',
+  // Options array + per-variant option values (option1/2/3 promoted by expandVariants)
   'options', 'option1', 'option2', 'option3',
-  // Variant fields
-  'variant_title', 'sku', 'weight', 'weight_unit',
+  // Variant fields (promoted to root level by expandVariants)
+  'variant_title', 'sku', 'price', 'compare_at_price',
+  'weight', 'weight_unit',
   'inventory_management', 'inventory_quantity', 'inventory_policy', 'fulfillment_service',
-  'price', 'compare_at_price', 'requires_shipping', 'taxable', 'barcode',
-  // Images
+  'requires_shipping', 'taxable', 'barcode',
+  // Images array (flattened JSON string in grid)
   'images', 'variant_image',
-  // SEO
+  // SEO (flattened from seo.{title,description} by flattenRecord)
   'seo_title', 'seo_description',
-  // Meta
+  // Metafields array
   'metafields',
 ]
 
@@ -290,7 +293,7 @@ export default function ExcelGrid({ rows, onSave }: ExcelGridProps) {
   }
 
   return (
-    <div className="relative flex flex-col h-full">
+    <div className="relative flex flex-col flex-1 min-h-0">
       {/* Grid wrapper — both axes scrollable */}
       <div className="flex-1 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm bg-white dark:bg-slate-900">
         <table className="border-collapse text-xs" style={{ minWidth: 'max-content' }}>

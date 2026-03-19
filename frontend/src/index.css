@@ -94,10 +94,16 @@
   }
 }
 
-/* Dashboard walking pet */
+/* Dashboard walking pet — right direction */
 @keyframes pet-walk {
   from { transform: translateX(-80px); }
   to   { transform: translateX(calc(100vw + 80px)); }
+}
+
+/* Dashboard walking pet — left direction */
+@keyframes pet-walk-left {
+  from { transform: translateX(calc(100vw + 80px)); }
+  to   { transform: translateX(-80px); }
 }
 
 /* Custom scrollbar */

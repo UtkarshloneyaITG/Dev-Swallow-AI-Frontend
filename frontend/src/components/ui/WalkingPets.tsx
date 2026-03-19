@@ -7,6 +7,8 @@ const BASE = 'https://raw.githubusercontent.com/tonybaloney/vscode-pets/main/med
 // ---------------------------------------------------------------------------
 const WALK_ANIMS   = ['walk', 'walk_fast', 'run', 'idle', 'lie']  // dogs & fox
 const MONKEY_ANIMS = ['walk', 'run', 'idle']                       // monkey (verified in vscode-pets)
+const PANDA_ANIMS  = ['walk', 'walk_fast', 'run', 'idle', 'lie', 'swipe']  // panda: black & brown variants
+const TOTORO_ANIMS = ['walk', 'run', 'idle', 'lie']               // totoro: gray only
 
 interface PetDef {
   animal: string
@@ -22,10 +24,14 @@ const ALL_PETS: PetDef[] = [
   { animal: 'fox', variant: 'red',   anims: WALK_ANIMS },
   { animal: 'fox', variant: 'white', anims: WALK_ANIMS },
   // Dogs
-  { animal: 'dog', variant: 'white', anims: WALK_ANIMS },
+  // { animal: 'dog', variant: 'white', anims: WALK_ANIMS },
   // { animal: 'cat', variant: 'brown', anims: WALK_ANIMS },
   // Monkey (vscode-pets, gray variant)
   { animal: 'monkey', variant: 'gray', anims: MONKEY_ANIMS },
+  // Panda — black & brown variants
+  { animal: 'panda', variant: 'black', anims: PANDA_ANIMS },
+  // Totoro — gray only
+  { animal: 'totoro', variant: 'gray', anims: TOTORO_ANIMS },
 ]
 
 // Moving animations translate across the screen; stationary ones stay in place
@@ -57,7 +63,7 @@ const FADE_DURATION   = 500  // ms
 
 let uid = 0
 
-interface SpawnedPet extends PetDef { id: number }
+interface SpawnedPet extends PetDef { id: number; direction: 'left' | 'right' }
 
 // ---------------------------------------------------------------------------
 // Single pet sprite — owns its own animation FSM + fade lifecycle
@@ -125,7 +131,9 @@ function PetSprite({
       {/* key on inner div restarts CSS animation on each anim change */}
       <div
         key={anim}
-        style={moving ? { animation: `pet-walk ${ms}ms linear 1 forwards` } : {}}
+        style={moving ? {
+          animation: `pet-walk${pet.direction === 'left' ? '-left' : ''} ${ms}ms linear 1 forwards`,
+        } : {}}
         onAnimationEnd={moving ? advance : undefined}
       >
         <img
@@ -133,6 +141,7 @@ function PetSprite({
           alt={pet.animal}
           className="h-14 w-auto select-none"
           draggable={false}
+          style={pet.direction === 'left' ? { transform: 'scaleX(-1)' } : undefined}
         />
       </div>
     </div>
@@ -162,7 +171,8 @@ export default function WalkingPets({ active = true }: { active?: boolean }) {
       const def  = pool[Math.floor(Math.random() * pool.length)]
       lastAnimalRef.current = def.animal
 
-      const pet: SpawnedPet = { ...def, id: uid++ }
+      const direction: 'left' | 'right' = Math.random() < 0.5 ? 'left' : 'right'
+      const pet: SpawnedPet = { ...def, id: uid++, direction }
       setPets((prev) => {
         if (prev.length >= MAX_PETS) return prev   // wait until slot frees
         return [...prev, pet]

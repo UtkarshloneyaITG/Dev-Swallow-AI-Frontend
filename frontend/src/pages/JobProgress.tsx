@@ -212,7 +212,15 @@ export default function JobProgress() {
         </div>
 
         {/* Progress bar section */}
-        <div className="themed-card rounded-2xl p-6 mb-6">
+        <div className="relative themed-card rounded-2xl p-6 mb-6">
+          {/* Cat gif sitting at top-center of the card */}
+          <img
+            src="/src/assests/gatos-memes-gato-meme.gif"
+            alt="cat"
+            className="absolute left-1/2 -translate-x-1/2 h-12 w-auto select-none pointer-events-none z-10"
+            style={{ top: '-2.15rem' }}
+            draggable={false}
+          />
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
