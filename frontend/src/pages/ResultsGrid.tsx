@@ -186,14 +186,17 @@ function rawRecordsToGridRows(records: Record<string, unknown>[]): GridRow[] {
 // ---------------------------------------------------------------------------
 // Shopify CSV export
 // ---------------------------------------------------------------------------
+// Column order matches the official Shopify product CSV template exactly.
 const SHOPIFY_HEADERS = [
   'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 'Tags', 'Published',
   'Option1 Name', 'Option1 Value', 'Option2 Name', 'Option2 Value', 'Option3 Name', 'Option3 Value',
   'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker', 'Variant Inventory Qty',
   'Variant Inventory Policy', 'Variant Fulfillment Service', 'Variant Price', 'Variant Compare At Price',
-  'Variant Requires Shipping', 'Variant Taxable', 'Variant Barcode', 'Variant Weight Unit',
-  'Image Src', 'Image Position', 'Image Alt Text', 'Variant Image',
-  'SEO Title', 'SEO Description', 'Status',
+  'Variant Requires Shipping', 'Variant Taxable', 'Variant Barcode',
+  'Image Src', 'Image Position', 'Image Alt Text',
+  'SEO Title', 'SEO Description',
+  'Variant Image', 'Variant Weight Unit',
+  'Status',
 ]
 
 function shopifyBool(val: unknown): string {
@@ -213,7 +216,9 @@ function toGrams(weight: unknown, unit: unknown): string {
 function shopifyEscape(val: unknown): string {
   if (val === null || val === undefined) return ''
   const s = String(val)
-  return s.includes('"') || s.includes(',') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+  return s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r') || s.includes('\t')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s
 }
 
 function exportToShopifyCSV(rawRows: FailedRow[]) {
@@ -278,21 +283,21 @@ function exportToShopifyCSV(rawRows: FailedRow[]) {
         shopifyBool(v.requires_shipping),
         shopifyBool(v.taxable),
         String(v.barcode ?? ''),
-        String(v.weight_unit ?? ''),
-        String(img.src ?? ''),
-        String(img.position ?? ''),
-        String(img.alt ?? ''),
-        String(v.image ?? ''),
+        String(img.src ?? img['Image Src'] ?? ''),
+        String(img.position ?? img['Image Position'] ?? ''),
+        String(img.alt ?? img['Image Alt Text'] ?? ''),
         first ? seoTitle : '',
         first ? seoDesc  : '',
+        String(v.image ?? ''),
+        String(v.weight_unit ?? ''),
         first ? status   : '',
       ])
     }
   }
 
   const header = SHOPIFY_HEADERS.map(shopifyEscape).join(',')
-  const body   = lines.map((r) => r.map(shopifyEscape).join(',')).join('\n')
-  const blob   = new Blob(['\uFEFF' + header + '\n' + body], { type: 'text/csv;charset=utf-8;' })
+  const body   = lines.map((r) => r.map(shopifyEscape).join(',')).join('\r\n')
+  const blob   = new Blob(['\uFEFF' + header + '\r\n' + body], { type: 'text/csv;charset=utf-8;' })
   const url    = URL.createObjectURL(blob)
   const a      = document.createElement('a')
   a.href = url
@@ -318,6 +323,7 @@ export default function ResultsGrid() {
 
   const [filterTab, setFilterTab] = useState<FilterTab>('all')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [editedCount, setEditedCount] = useState(0)
   const [showColMenu, setShowColMenu] = useState(false)
   // null = show all; populated only when user explicitly hides a column
@@ -355,6 +361,12 @@ export default function ResultsGrid() {
       .finally(() => setLoading(false))
   }, [jobId])
 
+  // Debounce search — filter only fires 150ms after the user stops typing
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search), 150)
+    return () => clearTimeout(id)
+  }, [search])
+
   // All possible data columns derived from loaded rows
   const allDataCols = useMemo(() => {
     const set = new Set<string>()
@@ -389,8 +401,8 @@ export default function ResultsGrid() {
     if (filterTab === 'correct') base = base.filter((r) => r.status === 'correct')
     if (filterTab === 'failed')  base = base.filter((r) => r.status === 'failed')
 
-    if (search.trim()) {
-      const q = search.trim().toLowerCase()
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.trim().toLowerCase()
       base = base.filter((row) =>
         Object.values(row.data).some((v) => v.toLowerCase().includes(q))
       )
@@ -405,7 +417,7 @@ export default function ResultsGrid() {
         Object.entries(row.data).filter(([k]) => !hiddenCols.has(k))
       ),
     }))
-  }, [filterTab, search, hiddenCols, rows])
+  }, [filterTab, debouncedSearch, hiddenCols, rows])
 
   const correctCount = rows.filter((r) => r.status === 'correct').length
   const failedCount = rows.filter((r) => r.status === 'failed').length
@@ -423,6 +435,10 @@ export default function ResultsGrid() {
         })
     exportToShopifyCSV(filtered)
     setShowExportModal(false)
+  }
+
+  async function handleRetryRow(rowId: string) {
+    await migrationApi.aiRetry(rowId)
   }
 
   async function handleSave(edited: GridRow[]) {
@@ -542,8 +558,8 @@ export default function ResultsGrid() {
           {(
             [
               { key: 'all', label: 'All', count: rows.length },
-              { key: 'correct', label: 'Correct ✅', count: correctCount },
-              { key: 'failed', label: 'Failed ❌', count: failedCount },
+              { key: 'correct', label: 'Correct ', count: correctCount },
+              { key: 'failed', label: 'Failed ', count: failedCount },
             ] as { key: FilterTab; label: string; count: number }[]
           ).map(({ key, label, count }) => (
             <button
@@ -626,13 +642,34 @@ export default function ResultsGrid() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
       >
-        <ExcelGrid
-          rows={filteredRows}
-          onSave={(edited) => {
-            setEditedCount(0)
-            handleSave(edited)
-          }}
-        />
+        {filteredRows.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center gap-3">
+            <Search className="w-8 h-8 text-slate-300 dark:text-slate-600" />
+            <div>
+              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                No results for <span className="text-slate-800 dark:text-slate-200">&ldquo;{debouncedSearch}&rdquo;</span>
+              </p>
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                Try a different keyword or clear the search
+              </p>
+            </div>
+            <button
+              onClick={() => setSearch('')}
+              className="text-xs text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+            >
+              Clear search
+            </button>
+          </div>
+        ) : (
+          <ExcelGrid
+            rows={filteredRows}
+            onRetryRow={handleRetryRow}
+            onSave={(edited) => {
+              setEditedCount(0)
+              handleSave(edited)
+            }}
+          />
+        )}
       </motion.div>
 
       {/* Export type modal */}

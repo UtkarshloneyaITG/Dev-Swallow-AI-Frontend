@@ -206,10 +206,19 @@ function mapRow(raw: Record<string, unknown>, rowIndex = 0): FailedRow {
   const cleanedData = raw.cleaned_data as Record<string, unknown> | null | undefined
   const originalData = raw.original_data as Record<string, unknown> | null | undefined
 
-  const displayData: Record<string, unknown> =
+  const baseData: Record<string, unknown> =
     (finalResult  && Object.keys(finalResult).length  > 0) ? finalResult  :
     (cleanedData  && Object.keys(cleanedData).length  > 0) ? cleanedData  :
     (originalData ?? {})
+
+  // If the chosen source has no images but original_data does, merge them in.
+  // The AI sometimes drops images from final_result even when original_data has them.
+  const hasImages = Array.isArray(baseData.images) && (baseData.images as unknown[]).length > 0
+  const originalImages = Array.isArray(originalData?.images) ? originalData!.images : []
+  const displayData: Record<string, unknown> =
+    (!hasImages && originalImages.length > 0)
+      ? { ...baseData, images: originalImages }
+      : baseData
 
   let mappedStatus: FailedRow['status']
   if (status === 'correct')                                                   mappedStatus = 'resolved'

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
+    "@tanstack/react-virtual": "^3.13.23",
     "framer-motion": "^11.0.0",
     "gsap": "^3.14.2",
     "lucide-react": "^0.344.0",
