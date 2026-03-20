@@ -236,28 +236,8 @@ const MemoRow = memo(function MemoRow({
         {displayIdx + 1}
       </td>
 
-      {/* Status pill */}
-      <td className="border border-slate-200 dark:border-slate-700 px-3 py-2 whitespace-nowrap">
-        {isCorrect ? (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            correct
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-            failed
-          </span>
-        )}
-      </td>
-
-      {/* Confidence bar */}
-      <td className="border border-slate-200 dark:border-slate-700 px-3 py-2" style={{ minWidth: '8rem' }}>
-        <ConfidenceBar value={row.confidenceScore} />
-      </td>
-
       {/* Actions — three-dot menu */}
-      <td className="border border-slate-200 dark:border-slate-700 px-2 py-2 text-center" style={{ minWidth: '2.5rem' }}>
+      <td className="sticky left-[3rem] z-10 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 px-2 py-2 text-center" style={{ minWidth: '2.5rem' }}>
         <div className="relative inline-block" ref={menuRef}>
           <button
             className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
@@ -282,6 +262,26 @@ const MemoRow = memo(function MemoRow({
             </div>
           )}
         </div>
+      </td>
+
+      {/* Status pill */}
+      <td className="border border-slate-200 dark:border-slate-700 px-3 py-2 whitespace-nowrap">
+        {isCorrect ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            correct
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+            failed
+          </span>
+        )}
+      </td>
+
+      {/* Confidence bar */}
+      <td className="border border-slate-200 dark:border-slate-700 px-3 py-2" style={{ minWidth: '8rem' }}>
+        <ConfidenceBar value={row.confidenceScore} />
       </td>
 
       {/* Data cells */}
@@ -549,6 +549,10 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
                 style={{ minWidth: '3rem' }}
               >#</th>
               <th
+                className="sticky left-[3rem] top-0 z-30 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-2 text-xs font-medium uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap select-none text-center"
+                style={{ minWidth: '2.5rem' }}
+              />
+              <th
                 className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400 whitespace-nowrap cursor-pointer select-none hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
                 style={{ minWidth: '6rem' }}
                 onClick={() => handleSort('__status')}
@@ -562,10 +566,6 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
               >
                 <div className="flex items-center gap-1">Confidence <SortIcon col="__confidence" /></div>
               </th>
-              <th
-                className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-2 text-xs font-medium uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap select-none text-center"
-                style={{ minWidth: '2.5rem' }}
-              />
               {dataCols.map((col) => (
                 <th
                   key={col}
