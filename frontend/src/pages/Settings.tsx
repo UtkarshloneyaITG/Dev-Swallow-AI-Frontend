@@ -6,14 +6,28 @@ import Button from '../components/ui/Button'
 import { useAuth } from '../context/AuthContext'
 import { useTheme, type ColorTheme } from '../context/ThemeContext'
 
+export const SHOPIFY_GRID_KEY = 'swallow_shopify_grid_view'
+export const SHOPIFY_CSV_KEY  = 'swallow_shopify_csv_view'
+
 interface ToggleProps {
   label: string
   description: string
   defaultChecked?: boolean
+  storageKey?: string        // if provided, persists to localStorage
 }
 
-function Toggle({ label, description, defaultChecked = false }: ToggleProps) {
-  const [checked, setChecked] = useState(defaultChecked)
+function Toggle({ label, description, defaultChecked = false, storageKey }: ToggleProps) {
+  const [checked, setChecked] = useState(() => {
+    if (storageKey) return localStorage.getItem(storageKey) === 'true'
+    return defaultChecked
+  })
+
+  function handleToggle() {
+    const next = !checked
+    setChecked(next)
+    if (storageKey) localStorage.setItem(storageKey, String(next))
+  }
+
   return (
     <div className="flex items-center justify-between py-3.5 border-b border-black/5 dark:border-white/5 last:border-0">
       <div>
@@ -24,7 +38,7 @@ function Toggle({ label, description, defaultChecked = false }: ToggleProps) {
         type="button"
         role="switch"
         aria-checked={checked}
-        onClick={() => setChecked((v) => !v)}
+        onClick={handleToggle}
         className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none ${
           checked ? 'bg-[rgb(var(--accent,_0_0_0))]' : 'bg-slate-200 dark:bg-slate-700'
         }`}
@@ -62,7 +76,7 @@ export default function Settings() {
   }
 
   return (
-    <div ref={pageRef} className="min-h-screen">
+    <div ref={pageRef} className="min-h-screen relative z-10">
       {/* Header */}
       <div className="px-8 pt-10 pb-6 themed-header">
         <div className="max-w-5xl mx-auto">
@@ -328,6 +342,16 @@ export default function Settings() {
                     label="Preserve original IDs"
                     description="Keep source system IDs as external_id in Shopify"
                     defaultChecked={false}
+                  />
+                  <Toggle
+                    label="Shopify Product View"
+                    description="Show a Shopify-style product card view button on the Results page"
+                    storageKey={SHOPIFY_GRID_KEY}
+                  />
+                  <Toggle
+                    label="Shopify CSV Preview"
+                    description="Show a Shopify CSV format preview button on the Results page"
+                    storageKey={SHOPIFY_CSV_KEY}
                   />
                 </div>
               )}

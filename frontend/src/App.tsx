@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { useAuth } from './context/AuthContext'
+import { PageLoader } from './components/ui/Spinner'
 
 // Layout
 import DashboardLayout from './components/layout/DashboardLayout'
@@ -19,7 +20,7 @@ import ResultsGrid from './pages/ResultsGrid'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
-  if (isLoading) return null                        // wait for session restore
+  if (isLoading) return <PageLoader />
   if (!user) return <Navigate to="/login" replace />
   return <>{children}</>
 }

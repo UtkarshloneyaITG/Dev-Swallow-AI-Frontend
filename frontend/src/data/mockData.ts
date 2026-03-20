@@ -17,6 +17,7 @@ export const mockJobs: MigrationJob[] = [
     totalRows: 10,
     correctRows: 8,
     failedRows: 2,
+    processedRows: 10,
     processingRows: 0,
     progress: 100,
     createdAt: '2026-03-15T09:00:00Z',
@@ -32,6 +33,7 @@ export const mockJobs: MigrationJob[] = [
     totalRows: 200,
     correctRows: 108,
     failedRows: 22,
+    processedRows: 130,
     processingRows: 70,
     progress: 65,
     createdAt: '2026-03-17T08:10:00Z',
@@ -46,6 +48,7 @@ export const mockJobs: MigrationJob[] = [
     totalRows: 450,
     correctRows: 0,
     failedRows: 0,
+    processedRows: 0,
     processingRows: 0,
     progress: 0,
     createdAt: '2026-03-17T10:30:00Z',
@@ -71,6 +74,7 @@ export const mockFailedRows: FailedRow[] = [
     confidenceScore: 0.12,
     attempts: 2,
     status: 'failed',
+    validationErrors: [],
   },
   {
     id: 'row_02',
@@ -89,6 +93,7 @@ export const mockFailedRows: FailedRow[] = [
     confidenceScore: 0.45,
     attempts: 1,
     status: 'failed',
+    validationErrors: [],
   },
   {
     id: 'row_03',
@@ -109,6 +114,7 @@ export const mockFailedRows: FailedRow[] = [
     confidenceScore: 0.67,
     attempts: 3,
     status: 'failed',
+    validationErrors: [],
   },
   {
     id: 'row_04',
@@ -129,6 +135,7 @@ export const mockFailedRows: FailedRow[] = [
     confidenceScore: 0.31,
     attempts: 1,
     status: 'failed',
+    validationErrors: [],
   },
 ]
 

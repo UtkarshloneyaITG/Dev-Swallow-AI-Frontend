@@ -295,7 +295,7 @@ export default function NewMigration() {
   }
 
   return (
-    <div ref={pageRef} className="min-h-screen">
+    <div ref={pageRef} className="min-h-screen relative z-10">
       {/* Header */}
       <div className="px-8 pt-10 pb-6 themed-header">
         <div className="max-w-5xl mx-auto">

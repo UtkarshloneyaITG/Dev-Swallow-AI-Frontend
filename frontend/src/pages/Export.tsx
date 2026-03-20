@@ -3,6 +3,7 @@ import type { ComponentType } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { usePageAnimation } from '../hooks/usePageAnimation'
+import { PageLoader } from '../components/ui/Spinner'
 import {
   ArrowLeft,
   Download,
@@ -100,9 +101,7 @@ export default function Export() {
 
   if (!job) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-sm text-slate-500 dark:text-slate-400">Loading…</p>
-      </div>
+      <PageLoader />
     )
   }
 

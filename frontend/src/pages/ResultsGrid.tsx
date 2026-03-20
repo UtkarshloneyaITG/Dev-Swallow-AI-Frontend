@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { usePageAnimation } from '../hooks/usePageAnimation'
+import { PageLoader } from '../components/ui/Spinner'
 import {
   ArrowLeft,
   Download,
@@ -11,11 +12,16 @@ import {
   XCircle,
   Hash,
   PencilLine,
+  LayoutGrid,
+  Table2,
 } from 'lucide-react'
 import ExcelGrid from '../components/ui/ExcelGrid'
 import type { GridRow } from '../components/ui/ExcelGrid'
+import ShopifyGridView from '../components/migration/ShopifyGridView'
+import ShopifyCsvView from '../components/migration/ShopifyCsvView'
 import { migrationApi } from '../services/api'
 import type { MigrationJob, FailedRow } from '../types'
+import { SHOPIFY_GRID_KEY, SHOPIFY_CSV_KEY } from './Settings'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,32 +108,112 @@ function toCSVRows(records: Record<string, unknown>[]): Record<string, string>[]
   })
 }
 
+/**
+ * Extract image array from a data record.
+ * Returns sorted array of {src, alt, position} objects.
+ */
+function extractImages(data: Record<string, unknown>): Array<Record<string, unknown>> {
+  const raw = data.images
+  if (!Array.isArray(raw)) return []
+  const imgs = raw as Array<Record<string, unknown>>
+  return [...imgs].sort((a, b) => Number(a.position ?? 0) - Number(b.position ?? 0))
+}
+
+/**
+ * Map a validation error loc string to the actual column key in the grid row.
+ * Examples:
+ *   "images[0].src"       → "image_src"
+ *   "images[0].alt"       → "image_alt_text"
+ *   "images[0].position"  → "image_position"
+ *   "variants[0].price"   → "price"
+ *   "variants[0].sku"     → "sku"
+ *   "title"               → "title"
+ */
+function locToCol(loc: string, availableCols: string[]): string | null {
+  // Strip array index: "images[0].src" → "images.src"
+  const normalised = loc.replace(/\[\d+\]/g, '')
+
+  // Known mappings for nested paths
+  const MAP: Record<string, string> = {
+    'images.src':              'image_src',
+    'images.alt':              'image_alt_text',
+    'images.position':         'image_position',
+    'variants.price':          'price',
+    'variants.compare_at_price': 'compare_at_price',
+    'variants.sku':            'sku',
+    'variants.barcode':        'barcode',
+    'variants.weight':         'variant_weight',
+    'variants.inventory_quantity': 'inventory_quantity',
+    'variants.option1':        'option1_value',
+    'variants.option2':        'option2_value',
+    'variants.option3':        'option3_value',
+    'seo.title':               'seo_title',
+    'seo.description':         'seo_description',
+  }
+
+  if (MAP[normalised]) return MAP[normalised]
+
+  // Fallback: take last segment of dot path and find matching col
+  const last = normalised.split('.').pop() ?? normalised
+  return availableCols.find((c) => c === last || c.replace(/-/g, '_') === last) ?? null
+}
+
 function rowsToGridRows(rows: FailedRow[]): GridRow[] {
   if (rows.length === 0) return []
 
-  // Expand variants: one FailedRow may produce multiple GridRows
-  const expanded: Array<{ row: FailedRow; data: Record<string, unknown> }> = []
+  // Step 1: Expand variants per FailedRow — each variant becomes its own record
+  // keeping the images array on each (images belong to the product, same for all variants)
+  const expanded: Array<{ row: FailedRow; data: Record<string, unknown>; imgIndex: number; isImageOnly: boolean }> = []
+
   for (const row of rows) {
-    for (const data of expandVariants(row.originalData).map(flattenRecord)) {
-      expanded.push({ row, data })
+    const p = row.originalData
+    const variantRecords = expandVariants(p).map(flattenRecord)
+    const images = extractImages(p)
+    const numRows = Math.max(variantRecords.length, images.length, 1)
+
+    for (let i = 0; i < numRows; i++) {
+      const variantData = variantRecords[i] ?? variantRecords[0] ?? {}
+      const img = images[i] ?? null
+      const isImageOnly = i >= variantRecords.length  // more images than variants
+
+      // Build the merged record for this row
+      const merged: Record<string, unknown> = isImageOnly
+        ? { handle: p.handle ?? p['Handle'] ?? '' }  // image-only row: just handle
+        : { ...variantData }
+
+      // Attach image fields for this row's paired image
+      merged['image_src']      = img ? String(img.src      ?? img['Image Src']      ?? '') : ''
+      merged['image_position'] = img ? String(img.position ?? img['Image Position'] ?? '') : ''
+      merged['image_alt']      = img ? String(img.alt      ?? img['Image Alt Text'] ?? '') : ''
+
+      // Keep full images array on every row so grid/card views can collect all product images
+      merged['images'] = p.images ?? []
+
+      expanded.push({ row, data: merged, imgIndex: i, isImageOnly })
     }
   }
 
-  const csvRows = toCSVRows(expanded.map((p) => p.data))
+  // Step 2: Collect all keys and stringify values uniformly
+  const allKeys = Array.from(new Set(expanded.flatMap((e) => Object.keys(e.data))))
+  const csvRows: Record<string, string>[] = expanded.map(({ data }) => {
+    const r: Record<string, string> = {}
+    for (const k of allKeys) r[k] = csvCell(data[k])
+    return r
+  })
 
-  return expanded.map(({ row }, idx) => {
+  // Step 3: Build GridRows
+  return expanded.map(({ row, isImageOnly }, idx) => {
     const isFailed = row.status !== 'resolved'
     const dataRecord = csvRows[idx]
 
-    // Detect error fields and severity
     const errorFields: string[] = []
     const cellWarnings: Record<string, string> = {}
     const cellSeverity: Record<string, 'error' | 'warning'> = {}
 
-    if (isFailed) {
+    // Only flag errors on real variant rows, not image-only rows
+    if (isFailed && !isImageOnly) {
       const baseMsg = row.errorMessage?.trim()
 
-      // Empty/blank cells → warning severity
       for (const [col, v] of Object.entries(dataRecord)) {
         if (v === '' || v === null || v === undefined) {
           errorFields.push(col)
@@ -136,7 +222,6 @@ function rowsToGridRows(rows: FailedRow[]): GridRow[] {
         }
       }
 
-      // Fields explicitly mentioned in errorMessage → error severity (overrides warning)
       if (baseMsg) {
         for (const col of Object.keys(dataRecord)) {
           if (baseMsg.toLowerCase().includes(col.replace(/_/g, ' '))) {
@@ -147,13 +232,16 @@ function rowsToGridRows(rows: FailedRow[]): GridRow[] {
         }
       }
 
-      // Backend validation_errors from migration_rows collection
-      // loc uses dot-notation (e.g. "seo.title") — convert to flat key ("seo_title")
       for (const ve of row.validationErrors) {
-        const col = (ve.loc || ve.field).replace(/\./g, '_')
-        cellWarnings[col] = ve.msg || cellWarnings[col] || `"${col.replace(/_/g, ' ')}" has an issue`
-        cellSeverity[col] = ve.severity
-        if (!errorFields.includes(col)) errorFields.push(col)
+        // Map loc like "images[0].src" → grid column key
+        const raw = (ve.loc || ve.field)
+        const col = locToCol(raw, Object.keys(dataRecord))
+        const cols = col ? [col] : [raw.replace(/\./g, '_')]
+        for (const c of cols) {
+          cellWarnings[c] = ve.msg || cellWarnings[c] || `"${c.replace(/_/g, ' ')}" has an issue`
+          cellSeverity[c] = ve.severity
+          if (!errorFields.includes(c)) errorFields.push(c)
+        }
       }
     }
 
@@ -329,6 +417,11 @@ export default function ResultsGrid() {
   // null = show all; populated only when user explicitly hides a column
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set())
 
+  // View mode — enabled via Settings → Migration Defaults toggles
+  const shopifyGridEnabled = localStorage.getItem(SHOPIFY_GRID_KEY) === 'true'
+  const shopifyCsvEnabled  = localStorage.getItem(SHOPIFY_CSV_KEY)  === 'true'
+  const [viewMode, setViewMode] = useState<'table' | 'shopify' | 'csv'>('table')
+
   useEffect(() => {
     if (!jobId) return
     setLoading(true)
@@ -425,6 +518,7 @@ export default function ResultsGrid() {
   const pageTitle = job?.name || 'Migration Results'
 
   const [showExportModal, setShowExportModal] = useState(false)
+  const exportBtnRef = useRef<HTMLButtonElement>(null)
 
   function handleExport(type: 'all' | 'correct' | 'failed') {
     const filtered = type === 'all'
@@ -466,9 +560,7 @@ export default function ResultsGrid() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-sm text-slate-500 dark:text-slate-400">Loading results…</p>
-      </div>
+      <PageLoader label="Loading results…" />
     )
   }
 
@@ -501,13 +593,46 @@ export default function ResultsGrid() {
         </div>
 
         {/* Export Shopify CSV */}
-        <button
-          onClick={() => setShowExportModal(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium themed-card text-slate-700 dark:text-slate-200 hover:opacity-90 transition-all shadow-sm"
-        >
-          <Download className="w-3.5 h-3.5" />
-          Export Shopify CSV
-        </button>
+        <div className="relative">
+          <button
+            ref={exportBtnRef}
+            onClick={() => setShowExportModal((v) => !v)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium themed-card text-slate-700 dark:text-slate-200 hover:opacity-90 transition-all shadow-sm"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export 
+          </button>
+
+          {showExportModal && (
+            <>
+              {/* Click-outside backdrop (invisible) */}
+              <div className="fixed inset-0 z-40" onClick={() => setShowExportModal(false)} />
+              <div className="absolute right-0 top-full mt-2 z-50 w-56 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
+                <button
+                  onClick={() => handleExport('all')}
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left group border-b border-slate-100 dark:border-slate-800"
+                >
+                  <span className="font-medium text-slate-700 dark:text-slate-200">All rows <span className="font-normal text-slate-400">({rawRows.length})</span></span>
+                  <Download className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300" />
+                </button>
+                <button
+                  onClick={() => handleExport('correct')}
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-xs hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors text-left group border-b border-slate-100 dark:border-slate-800"
+                >
+                  <span className="font-medium text-emerald-700 dark:text-emerald-400">Correct only <span className="font-normal text-emerald-600/60">({correctCount})</span></span>
+                  <Download className="w-3.5 h-3.5 text-emerald-400 group-hover:text-emerald-600" />
+                </button>
+                <button
+                  onClick={() => handleExport('failed')}
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-xs hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors text-left group"
+                >
+                  <span className="font-medium text-rose-700 dark:text-rose-400">Failed only <span className="font-normal text-rose-600/60">({failedCount})</span></span>
+                  <Download className="w-3.5 h-3.5 text-rose-400 group-hover:text-rose-600" />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Stats bar */}
@@ -594,45 +719,66 @@ export default function ResultsGrid() {
           />
         </div>
 
-        {/* Column visibility toggle */}
-        <div className="relative">
-          <button
-            onClick={() => setShowColMenu((v) => !v)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-          >
-            <Columns className="w-3.5 h-3.5" />
-            Columns
-            <span className="text-slate-400">
-              ({allDataCols.length - hiddenCols.size}/{allDataCols.length})
-            </span>
-          </button>
+        {/* Column visibility toggle — only in table mode */}
+        {viewMode === 'table' && (
+          <div className="relative">
+            <button
+              onClick={() => setShowColMenu((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              <Columns className="w-3.5 h-3.5" />
+              Columns
+              <span className="text-slate-400">
+                ({allDataCols.length - hiddenCols.size}/{allDataCols.length})
+              </span>
+            </button>
 
-          {showColMenu && (
-            <>
-              {/* Backdrop */}
-              <div
-                className="fixed inset-0 z-20"
-                onClick={() => setShowColMenu(false)}
-              />
-              <div className="absolute left-0 top-full mt-1.5 z-30 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg p-2 min-w-[160px]">
-                {allDataCols.map((col) => (
-                  <label
-                    key={col}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer text-xs text-slate-700 dark:text-slate-300 select-none"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!hiddenCols.has(col)}
-                      onChange={() => toggleCol(col)}
-                      className="accent-blue-500 w-3 h-3"
-                    />
-                    <span className="font-mono">{col}</span>
-                  </label>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+            {showColMenu && (
+              <>
+                <div className="fixed inset-0 z-20" onClick={() => setShowColMenu(false)} />
+                <div className="absolute left-0 top-full mt-1.5 z-30 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg p-2 min-w-[160px]">
+                  {allDataCols.map((col) => (
+                    <label
+                      key={col}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer text-xs text-slate-700 dark:text-slate-300 select-none"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!hiddenCols.has(col)}
+                        onChange={() => toggleCol(col)}
+                        className="accent-blue-500 w-3 h-3"
+                      />
+                      <span className="font-mono">{col}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* View mode switcher — shown when at least one alternate view is enabled in Settings */}
+        {(shopifyGridEnabled || shopifyCsvEnabled) && (
+          <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-800 rounded-full p-0.5 ml-auto">
+            {(['table', ...(shopifyGridEnabled ? ['shopify'] : []), ...(shopifyCsvEnabled ? ['csv'] : [])] as ('table' | 'shopify' | 'csv')[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={[
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-150',
+                  viewMode === mode
+                    ? 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm'
+                    : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300',
+                ].join(' ')}
+              >
+                {mode === 'table'   && <Table2     className="w-3.5 h-3.5" />}
+                {mode === 'shopify' && <LayoutGrid className="w-3.5 h-3.5" />}
+                {mode === 'csv'     && <Download   className="w-3.5 h-3.5" />}
+                {mode === 'table'   ? 'Table' : mode === 'shopify' ? 'Shopify View' : 'CSV Preview'}
+              </button>
+            ))}
+          </div>
+        )}
       </motion.div>
 
       {/* Grid — fills remaining vertical space */}
@@ -660,6 +806,10 @@ export default function ResultsGrid() {
               Clear search
             </button>
           </div>
+        ) : viewMode === 'shopify' ? (
+          <ShopifyGridView rows={filteredRows} />
+        ) : viewMode === 'csv' ? (
+          <ShopifyCsvView rows={filteredRows} />
         ) : (
           <ExcelGrid
             rows={filteredRows}
@@ -672,71 +822,6 @@ export default function ResultsGrid() {
         )}
       </motion.div>
 
-      {/* Export type modal */}
-      {showExportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm"
-            onClick={() => setShowExportModal(false)}
-          />
-          <motion.div
-            className="relative themed-card rounded-2xl p-6 shadow-2xl w-full max-w-sm mx-4"
-            initial={{ opacity: 0, scale: 0.95, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100 mb-1">
-              Export Shopify CSV
-            </h2>
-            <p className="text-xs text-slate-400 dark:text-slate-500 mb-5">
-              Choose which rows to include in the export.
-            </p>
-
-            <div className="space-y-2">
-              <button
-                onClick={() => handleExport('all')}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left group"
-              >
-                <div>
-                  <p className="text-sm font-medium text-slate-700 dark:text-slate-200">All rows</p>
-                  <p className="text-xs text-slate-400 dark:text-slate-500">{rawRows.length} total records</p>
-                </div>
-                <Download className="w-4 h-4 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300 transition-colors" />
-              </button>
-
-              <button
-                onClick={() => handleExport('correct')}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors text-left group"
-              >
-                <div>
-                  <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Correct rows only</p>
-                  <p className="text-xs text-emerald-600/70 dark:text-emerald-500/70">{correctCount} records</p>
-                </div>
-                <Download className="w-4 h-4 text-emerald-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-300 transition-colors" />
-              </button>
-
-              <button
-                onClick={() => handleExport('failed')}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-rose-200 dark:border-rose-800/50 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors text-left group"
-              >
-                <div>
-                  <p className="text-sm font-medium text-rose-700 dark:text-rose-400">Failed rows only</p>
-                  <p className="text-xs text-rose-600/70 dark:text-rose-500/70">{failedCount} records</p>
-                </div>
-                <Download className="w-4 h-4 text-rose-400 group-hover:text-rose-600 dark:group-hover:text-rose-300 transition-colors" />
-              </button>
-            </div>
-
-            <button
-              onClick={() => setShowExportModal(false)}
-              className="mt-4 w-full py-2 rounded-xl text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            >
-              Cancel
-            </button>
-          </motion.div>
-        </div>
-      )}
     </div>
   )
 }

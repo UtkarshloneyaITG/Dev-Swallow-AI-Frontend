@@ -22,7 +22,7 @@
 
   /* Sidebar picks up --sidebar-bg from the active theme */
   aside[data-sidebar] {
-    background-color: var(--sidebar-bg, rgba(255,255,255,0.75)) !important;
+    background-color: var(--sidebar-bg, rgba(255,255,255,0.45)) !important;
   }
 
   /* Accent-based interactive states for themed variants */

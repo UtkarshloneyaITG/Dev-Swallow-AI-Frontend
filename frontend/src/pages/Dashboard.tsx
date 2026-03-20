@@ -9,6 +9,7 @@ import CrawlCard from '../components/migration/CrawlCard'
 import { useAuth } from '../context/AuthContext'
 import { migrationApi, getStoredCrawlSessions, removeCrawlSession } from '../services/api'
 import type { MigrationJob, StoredCrawlSession } from '../types'
+import { PageLoader } from '../components/ui/Spinner'
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -16,10 +17,15 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState<MigrationJob[]>([])
   const [crawls, setCrawls] = useState<StoredCrawlSession[]>([])
   const [activeTab, setActiveTab] = useState<'all' | 'migrations' | 'crawls'>('all')
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!user) return
-    migrationApi.listJobs(user.id).then(setJobs).catch(console.error)
+    setLoading(true)
+    migrationApi.listJobs(user.id)
+      .then(setJobs)
+      .catch(console.error)
+      .finally(() => setLoading(false))
     setCrawls(getStoredCrawlSessions(user.id))
   }, [user])
 
@@ -54,8 +60,10 @@ export default function Dashboard() {
 
   const pageRef = usePageAnimation()
 
+  if (loading) return <PageLoader label="Loading dashboard…" />
+
   return (
-    <div ref={pageRef} className="min-h-screen">
+    <div ref={pageRef} className="min-h-screen relative z-10">
       {/* Page header */}
       <motion.div
         className="px-8 pt-8 pb-6 themed-header"

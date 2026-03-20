@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { Spinner } from './Spinner'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'amber'
 
@@ -66,9 +67,7 @@ export default function Button({
         className,
       ].join(' ')}
     >
-      {loading && (
-        <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-      )}
+      {loading && <Spinner size={18} />}
       {!loading && icon && iconPosition === 'left' && (
         <span className="w-4 h-4 flex items-center justify-center">{icon}</span>
       )}

@@ -227,9 +227,17 @@ function mapRow(raw: Record<string, unknown>, rowIndex = 0): FailedRow {
   else                                                                        mappedStatus = 'failed'
 
   // Map validation_errors array from DB → typed ValidationError[]
-  const rawValidationErrors = Array.isArray(raw.validation_errors)
-    ? (raw.validation_errors as Record<string, unknown>[])
-    : []
+  // Fall back to the latest history entry's errors if validation_errors is empty
+  const rawValidationErrors: Record<string, unknown>[] =
+    Array.isArray(raw.validation_errors) && (raw.validation_errors as unknown[]).length > 0
+      ? (raw.validation_errors as Record<string, unknown>[])
+      : (() => {
+          const history = raw.history as Array<Record<string, unknown>> | undefined
+          if (!Array.isArray(history) || history.length === 0) return []
+          const latest = history[history.length - 1]
+          return Array.isArray(latest.errors) ? (latest.errors as Record<string, unknown>[]) : []
+        })()
+
   const validationErrors: FailedRow['validationErrors'] = rawValidationErrors.map((ve) => ({
     field:    String(ve.field    ?? ''),
     loc:      String(ve.loc      ?? ve.field ?? ''),

@@ -5,6 +5,7 @@ import { motion } from 'framer-motion'
 import { Mail, Lock, ArrowRight } from 'lucide-react'
 import Button from '../components/ui/Button'
 import Logo from '../components/ui/Logo'
+import BlobBackground from '../components/ui/BlobBackground'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -38,12 +39,8 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900 flex items-center justify-center p-4">
-      {/* Background blobs */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-96 h-96 bg-gradient-to-br from-blue-100/60 to-violet-100/40 dark:from-blue-900/20 dark:to-violet-900/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-gradient-to-br from-emerald-100/40 to-teal-100/30 dark:from-emerald-900/15 dark:to-teal-900/10 rounded-full blur-3xl" />
-      </div>
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
+      <BlobBackground />
 
       <motion.div
         className="relative w-full max-w-sm"
@@ -55,7 +52,7 @@ export default function Login() {
         <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-md border border-white/80 dark:border-white/10 rounded-3xl shadow-2xl shadow-black/5 dark:shadow-black/30 p-8">
           {/* Logo */}
           <div className="flex items-center gap-2.5 mb-8">
-            <Logo size={36} />
+            <Logo size={42} />
             <span className="text-xl font-light tracking-tight text-black dark:text-white">
               swallow
             </span>

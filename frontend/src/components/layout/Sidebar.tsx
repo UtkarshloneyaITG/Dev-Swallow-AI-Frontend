@@ -35,16 +35,16 @@ export default function Sidebar() {
 
   return (
     <motion.aside
-      className="w-60 flex-shrink-0 h-screen sticky top-0 flex flex-col backdrop-blur-xl border-r border-black/5 dark:border-white/5 overflow-hidden"
+      className="w-60 flex-shrink-0 h-screen sticky top-0 flex flex-col backdrop-blur-xl border-r border-orange-100/60 dark:border-white/5 overflow-hidden bg-white/50 dark:bg-slate-900/70"
       data-sidebar
       initial={{ x: -20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
       transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
     >
       {/* Logo */}
-      <div className="px-5 pt-6 pb-5 border-b border-black/5 dark:border-white/5">
+      <div className="relative px-5 pt-6 pb-5 border-b border-black/5 dark:border-white/5">
         <div className="flex items-center gap-2.5">
-          <Logo size={34} />
+          <Logo size={42} />
           <div>
             <span className="text-lg font-light tracking-tight text-black dark:text-white">
               Swallow
@@ -99,7 +99,7 @@ export default function Sidebar() {
       <div className="px-3 pb-5 border-t border-black/5 dark:border-white/5 pt-4 space-y-1">
         {/* User info */}
         <div className="flex items-center gap-2.5 px-3 py-2">
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center flex-shrink-0">
+          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-[#F97316] dark:from-slate-700 dark:to-slate-900 flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-semibold text-white">
               {user?.avatarInitials ?? '?'}
             </span>

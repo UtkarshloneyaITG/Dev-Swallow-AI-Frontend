@@ -5,6 +5,7 @@ import { motion } from 'framer-motion'
 import { User, Mail, Lock, ArrowRight } from 'lucide-react'
 import Button from '../components/ui/Button'
 import Logo from '../components/ui/Logo'
+import BlobBackground from '../components/ui/BlobBackground'
 
 export default function Register() {
   const navigate = useNavigate()
@@ -38,12 +39,8 @@ export default function Register() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900 flex items-center justify-center p-4">
-      {/* Background blobs */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -left-40 w-96 h-96 bg-gradient-to-br from-violet-100/50 to-blue-100/40 dark:from-violet-900/20 dark:to-blue-900/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-gradient-to-br from-emerald-100/40 to-cyan-100/30 dark:from-emerald-900/15 dark:to-cyan-900/10 rounded-full blur-3xl" />
-      </div>
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
+      <BlobBackground />
 
       <motion.div
         className="relative w-full max-w-sm"
@@ -55,7 +52,7 @@ export default function Register() {
         <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-md border border-white/80 dark:border-white/10 rounded-3xl shadow-2xl shadow-black/5 dark:shadow-black/30 p-8">
           {/* Logo */}
           <div className="flex items-center gap-2.5 mb-8">
-            <Logo size={36} />
+            <Logo size={42} />
             <span className="text-xl font-light tracking-tight text-black dark:text-white">
               swallow
             </span>
@@ -83,7 +80,7 @@ export default function Register() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Parth Sharma"
+                  placeholder="john wick"
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-black/10 dark:border-white/10 bg-white/60 dark:bg-slate-700/60 text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/10 focus:border-black/20 dark:focus:border-white/20 transition-all"
                 />
               </div>

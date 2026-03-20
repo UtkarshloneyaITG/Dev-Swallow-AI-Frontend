@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { usePageAnimation } from '../hooks/usePageAnimation'
+import { PageLoader } from '../components/ui/Spinner'
 import {
   CheckCircle2,
   XCircle,
@@ -119,14 +120,7 @@ export default function JobProgress() {
 
   if (!job) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Loading…</p>
-          <Button variant="primary" size="sm" onClick={() => navigate('/dashboard')}>
-            Back to Dashboard
-          </Button>
-        </div>
-      </div>
+      <PageLoader />
     )
   }
 

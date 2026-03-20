@@ -10,6 +10,7 @@ import { useAuth } from '../context/AuthContext'
 import { migrationApi } from '../services/api'
 import type { MigrationJob } from '../types'
 import type { MigrationStatus } from '../types'
+import { PageLoader } from '../components/ui/Spinner'
 
 const filters: { label: string; value: MigrationStatus | 'all' }[] = [
   { label: 'All', value: 'all' },
@@ -26,11 +27,27 @@ export default function Jobs() {
   const [jobs, setJobs] = useState<MigrationJob[]>([])
   const [filter, setFilter] = useState<MigrationStatus | 'all'>('all')
   const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!user) return
-    migrationApi.listJobs(user.id).then(setJobs).catch(console.error)
+    setLoading(true)
+    migrationApi.listJobs(user.id)
+      .then(setJobs)
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }, [user])
+
+  async function handleDeleteJob(id: string) {
+    setJobs((prev) => prev.filter((j) => j.id !== id))
+    try {
+      await migrationApi.deleteJob(id)
+    } catch (err) {
+      if (user) migrationApi.listJobs(user.id).then(setJobs).catch(console.error)
+    }
+  }
+
+  if (loading) return <PageLoader label="Loading jobs…" />
 
   const filtered = jobs.filter((job) => {
     const matchesFilter = filter === 'all' || job.status === filter
@@ -41,7 +58,7 @@ export default function Jobs() {
   })
 
   return (
-    <div ref={pageRef} className="min-h-screen">
+    <div ref={pageRef} className="min-h-screen relative z-10">
       {/* Header */}
       <div className="px-8 pt-10 pb-6 themed-header">
         <div className="max-w-5xl mx-auto flex items-start justify-between">
@@ -110,7 +127,7 @@ export default function Jobs() {
         {filtered.length > 0 ? (
           <div className="space-y-3">
             {filtered.map((job, i) => (
-              <JobCard key={job.id} job={job} index={i} />
+              <JobCard key={job.id} job={job} index={i} onDelete={handleDeleteJob} />
             ))}
           </div>
         ) : (

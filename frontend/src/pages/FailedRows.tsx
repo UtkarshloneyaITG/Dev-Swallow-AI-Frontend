@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { usePageAnimation } from '../hooks/usePageAnimation'
+import { PageLoader } from '../components/ui/Spinner'
 import { ArrowLeft, AlertTriangle, Download, Filter } from 'lucide-react'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
@@ -58,9 +59,7 @@ export default function FailedRows() {
 
   if (!job) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-sm text-slate-500 dark:text-slate-400">Job not found.</p>
-      </div>
+      <PageLoader label="Job not found." />
     )
   }
 

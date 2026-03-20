@@ -1,7 +1,30 @@
-import { useState, useRef, useCallback, useEffect, useMemo, memo } from 'react'
-import { ChevronUp, ChevronDown, RotateCcw, Save, MoreVertical, RefreshCw } from 'lucide-react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
+import { AgGridReact } from 'ag-grid-react'
+import {
+  ModuleRegistry,
+  ClientSideRowModelModule,
+  TextEditorModule,
+  ValidationModule,
+  type ColDef,
+  type ICellRendererParams,
+  type GetRowIdParams,
+  type CellValueChangedEvent,
+  type GridReadyEvent,
+  type GridApi,
+} from 'ag-grid-community'
+import { RotateCcw, Save, RefreshCw } from 'lucide-react'
+import 'ag-grid-community/styles/ag-grid.css'
 
+// Register only the modules we need (tree-shakeable)
+ModuleRegistry.registerModules([
+  ClientSideRowModelModule,
+  TextEditorModule,
+  ValidationModule,
+])
+
+// ---------------------------------------------------------------------------
+// Public types (unchanged so ResultsGrid.tsx needs no edits)
+// ---------------------------------------------------------------------------
 export interface GridRow {
   id: string
   rowIndex: number
@@ -20,611 +43,593 @@ interface ExcelGridProps {
   onRetryRow?: (rowId: string) => Promise<void>
 }
 
-interface ActiveCell {
-  rowId: string
-  col: string
-}
-
-interface SortState {
-  col: string
-  dir: 'asc' | 'desc'
-}
-
-interface TooltipState {
-  x: number
-  y: number
-  msg: string
-  severity: 'error' | 'warning'
-}
-
+// ---------------------------------------------------------------------------
+// Shopify column ordering hint
+// ---------------------------------------------------------------------------
+// Matches exact Shopify CSV export column order (flat snake_case keys)
 const SHOPIFY_COL_ORDER = [
-  'handle', 'title', 'body_html', 'vendor', 'category', 'product_type', 'tags', 'status',
-  'options', 'option1', 'option2', 'option3',
-  'variant_title', 'sku', 'price', 'compare_at_price',
-  'weight', 'weight_unit',
-  'inventory_management', 'inventory_quantity', 'inventory_policy', 'fulfillment_service',
-  'requires_shipping', 'taxable', 'barcode',
-  'images', 'variant_image',
-  'seo_title', 'seo_description',
-  'metafields',
+  'handle',
+  'title',
+  'body_html',
+  'vendor',
+  'category', 'product_category',
+  'product_type',
+  'tags',
+  'published',
+  'option1_name', 'option1',
+  'option2_name', 'option2',
+  'option3_name', 'option3',
+  'sku',
+  'grams', 'weight_grams',
+  'inventory_management',
+  'inventory_quantity',
+  'inventory_policy',
+  'fulfillment_service',
+  'price',
+  'compare_at_price',
+  'requires_shipping',
+  'taxable',
+  'barcode',
+  'image_src',
+  'image_position',
+  'image_alt',
+  'gift_card',
+  'seo_title',
+  'seo_description',
+  'variant_image',
+  'weight_unit',
+  'tax_code',
+  'cost_per_item',
+  'status',
+  // leftover / non-Shopify keys go after
+  'options', 'variants', 'images', 'metafields',
 ]
 
 function deriveColumns(rows: GridRow[]): string[] {
   const colSet = new Set<string>()
-  for (const row of rows) {
-    for (const key of Object.keys(row.data)) colSet.add(key)
-  }
+  for (const row of rows) for (const key of Object.keys(row.data)) colSet.add(key)
   const ordered = SHOPIFY_COL_ORDER.filter((c) => colSet.has(c))
   const rest    = Array.from(colSet).filter((c) => !SHOPIFY_COL_ORDER.includes(c))
   return [...ordered, ...rest]
 }
 
 // ---------------------------------------------------------------------------
-// ConfidenceBar — memoized so it never re-renders unless value changes
+// Tooltip state
 // ---------------------------------------------------------------------------
-const ConfidenceBar = memo(function ConfidenceBar({ value }: { value: number }) {
-  const pct = Math.round(value * 100)
-  const color =
-    pct >= 90 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-400' : 'bg-rose-400'
+interface TooltipState { x: number; y: number; msg: string; severity: 'error' | 'warning' }
+
+// ---------------------------------------------------------------------------
+// Flat row shape fed into AG Grid
+// Each field from `data` is spread at the top level so AG Grid can access it.
+// We keep the original GridRow reference inside __meta for callbacks.
+// ---------------------------------------------------------------------------
+interface FlatRow {
+  __id: string
+  __meta: GridRow
+  [col: string]: unknown
+}
+
+function toFlatRow(row: GridRow): FlatRow {
+  return { __id: row.id, __meta: row, ...row.data }
+}
+
+// ---------------------------------------------------------------------------
+// Cell class rules — evaluated by AG Grid lazily per cell, replacing cellStyle
+// These CSS classes are injected once via <style> in the render output.
+// ---------------------------------------------------------------------------
+function makeCellClassRules(col: string, editedMap: Record<string, Set<string>>) {
+  return {
+    'cell-edited':   (p: { data?: FlatRow }) => !!(p.data && editedMap[p.data.__meta.id]?.has(col)),
+    'cell-error':    (p: { data?: FlatRow }) => {
+      if (!p.data) return false
+      const meta = p.data.__meta
+      if (meta.status !== 'failed') return false
+      const sev = meta.cellSeverity?.[col]
+      if (sev) return sev === 'error'
+      return meta.errorFields?.includes(col) ?? false
+    },
+    'cell-warning':  (p: { data?: FlatRow }) => {
+      if (!p.data) return false
+      const meta = p.data.__meta
+      if (meta.status !== 'failed') return false
+      return (meta.cellSeverity?.[col] ?? 'error') === 'warning' && (meta.errorFields?.includes(col) ?? false)
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Custom cell renderer — handles dot indicator + tooltip trigger
+// ---------------------------------------------------------------------------
+interface DataCellProps {
+  value: unknown
+  data: FlatRow
+  col: string
+  setTooltip: React.Dispatch<React.SetStateAction<TooltipState | null>>
+  editedMap: Record<string, Set<string>>
+}
+
+function DataCellRenderer({ value, data, col, setTooltip, editedMap }: DataCellProps) {
+  const meta     = (data as FlatRow).__meta
+  const isFailed = meta.status === 'failed'
+  const isError  = isFailed && (meta.errorFields?.includes(col) ?? false)
+  const severity = meta.cellSeverity?.[col] ?? (isError ? 'error' : null)
+  const msg      = meta.cellWarnings?.[col]
+  const isEdited = editedMap[meta.id]?.has(col) ?? false
+
+  const dotColor = severity === 'warning' ? '#f59e0b' : '#f43f5e'
+  const textColor = isEdited
+    ? '#92400e'
+    : severity === 'error'
+      ? '#be123c'
+      : severity === 'warning'
+        ? '#92400e'
+        : undefined
+
   return (
-    <div className="flex items-center gap-2 w-full">
-      <div className="flex-1 h-1.5 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs font-mono text-slate-500 dark:text-slate-400 tabular-nums w-8 text-right">
-        {value.toFixed(2)}
+    <div
+      className="relative w-full h-full flex items-center px-2 font-mono text-xs overflow-hidden"
+      style={{ color: textColor }}
+      onMouseEnter={msg ? (e) => {
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+        setTooltip({ x: rect.left + rect.width / 2, y: rect.top - 6, msg, severity: severity ?? 'error' })
+      } : undefined}
+      onMouseLeave={msg ? () => setTooltip(null) : undefined}
+    >
+      {isError && !isEdited && (
+        <span
+          className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full z-10 pointer-events-none"
+          style={{ background: dotColor }}
+        />
+      )}
+      {isEdited && (
+        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400 z-10 pointer-events-none" />
+      )}
+      <span className="truncate">
+        {value ? String(value) : <span className="text-slate-300 italic">—</span>}
       </span>
     </div>
   )
-})
-
-// ---------------------------------------------------------------------------
-// MemoCell — re-renders only when its own data/state changes.
-// KEY: editingValue is passed as '' for non-active cells so keystrokes in
-// the active cell do NOT trigger re-renders in every other cell.
-// ---------------------------------------------------------------------------
-interface CellProps {
-  col: string
-  rowId: string
-  cellValue: string
-  isActive: boolean
-  cellEdited: boolean
-  isErrorField: boolean
-  warningMsg: string | undefined
-  severity: 'error' | 'warning' | null
-  editingValue: string           // always '' when !isActive — keeps prop stable
-  inputRef: React.RefObject<HTMLInputElement>
-  onCellClick: (col: string, currentValue: string) => void
-  onTooltipShow: (x: number, y: number, msg: string, sev: 'error' | 'warning') => void
-  onTooltipHide: () => void
-  onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>, col: string) => void
-  onBlur: () => void
-  onEditChange: (v: string) => void
 }
 
-const MemoCell = memo(function MemoCell({
-  col, cellValue, isActive, cellEdited, isErrorField, warningMsg, severity,
-  editingValue, inputRef, onCellClick, onTooltipShow, onTooltipHide,
-  onKeyDown, onBlur, onEditChange,
-}: CellProps) {
-  const isWarning = severity === 'warning'
-
-  const borderClass = isActive
-    ? 'outline outline-2 outline-blue-500 z-10 border-slate-200 dark:border-slate-700'
-    : isErrorField && !isWarning
-      ? 'border-rose-300 dark:border-rose-700'
-      : isErrorField && isWarning
-        ? 'border-amber-300 dark:border-amber-600'
-        : 'border-slate-200 dark:border-slate-700'
-
-  const bgClass = isActive
-    ? 'bg-white dark:bg-slate-800'
-    : cellEdited
-      ? 'bg-amber-50 dark:bg-amber-950/30'
-      : isErrorField && !isWarning
-        ? 'bg-rose-50/60 dark:bg-rose-950/30'
-        : isErrorField && isWarning
-          ? 'bg-amber-50/60 dark:bg-amber-950/20'
-          : ''
-
-  const dotClass = isWarning
-    ? 'bg-amber-400 dark:bg-amber-500'
-    : 'bg-rose-400 dark:bg-rose-500'
-
-  const textClass = isErrorField
-    ? isWarning
-      ? 'text-amber-700 dark:text-amber-300 font-medium'
-      : 'text-rose-700 dark:text-rose-300 font-medium'
-    : 'text-slate-700 dark:text-slate-300'
-
-  const emptyClass = isErrorField
-    ? isWarning
-      ? 'text-amber-400 dark:text-amber-600 italic'
-      : 'text-rose-400 dark:text-rose-600 italic'
-    : 'text-slate-300 dark:text-slate-600 italic'
-
+// ---------------------------------------------------------------------------
+// Status cell renderer
+// ---------------------------------------------------------------------------
+function StatusRenderer({ data }: ICellRendererParams) {
+  const meta    = (data as FlatRow).__meta
+  const correct = meta.status === 'correct'
   return (
-    <td
-      className={['border px-0 py-0 relative cursor-text', borderClass, bgClass].join(' ')}
-      style={{ minWidth: '9rem' }}
-      onClick={() => onCellClick(col, cellValue)}
-      onMouseEnter={warningMsg && !isActive
-        ? (e) => {
-            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-            onTooltipShow(rect.left + rect.width / 2, rect.top - 6, warningMsg, severity ?? 'error')
-          }
-        : undefined}
-      onMouseLeave={warningMsg ? onTooltipHide : undefined}
-    >
-      {isErrorField && !isActive && !cellEdited && (
-        <span className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full ${dotClass} z-10 pointer-events-none`} />
-      )}
-      {cellEdited && !isActive && (
-        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400 z-10 pointer-events-none" />
-      )}
-      {isActive ? (
-        <input
-          ref={inputRef}
-          value={editingValue}
-          onChange={(e) => onEditChange(e.target.value)}
-          onKeyDown={(e) => onKeyDown(e, col)}
-          onBlur={onBlur}
-          className="w-full h-full px-3 py-2 font-mono text-xs bg-white dark:bg-slate-800 outline-none border-0 text-slate-800 dark:text-slate-100"
-          style={{ minWidth: '9rem', minHeight: '2rem' }}
-        />
-      ) : (
-        <span className={`block px-3 py-2 font-mono text-xs truncate max-w-xs ${textClass}`}>
-          {cellValue || <span className={emptyClass}>—</span>}
-        </span>
-      )}
-    </td>
+    <div className="swallow-status-cell">
+      <span className={correct ? 'swallow-badge-correct' : 'swallow-badge-failed'}>
+        <span className={correct ? 'swallow-dot-correct' : 'swallow-dot-failed'} />
+        {correct ? 'correct' : 'failed'}
+      </span>
+    </div>
   )
-})
-
-// ---------------------------------------------------------------------------
-// MemoRow — re-renders only when this row's data or active state changes.
-// Receives activeCol (null if not the active row) so unrelated rows skip
-// re-rendering entirely when the user clicks into a different row.
-// ---------------------------------------------------------------------------
-interface RowProps {
-  row: GridRow
-  displayIdx: number
-  dataCols: string[]
-  activeCol: string | null
-  rowEdits: Record<string, string>
-  editingValue: string
-  isRetrying: boolean
-  inputRef: React.RefObject<HTMLInputElement>
-  onCellClick: (rowId: string, col: string, currentValue: string) => void
-  onTooltipShow: (x: number, y: number, msg: string, sev: 'error' | 'warning') => void
-  onTooltipHide: () => void
-  onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>, col: string) => void
-  onBlur: () => void
-  onEditChange: (v: string) => void
-  onRetryRow?: (rowId: string) => void
 }
 
-const MemoRow = memo(function MemoRow({
-  row, displayIdx, dataCols, activeCol, rowEdits, editingValue, isRetrying,
-  inputRef, onCellClick, onTooltipShow, onTooltipHide, onKeyDown, onBlur, onEditChange, onRetryRow,
-}: RowProps) {
-  const [menuOpen, setMenuOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    if (!menuOpen) return
-    function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [menuOpen])
-
-  const isCorrect = row.status === 'correct'
-  const rowBg = isCorrect ? 'bg-white dark:bg-slate-900' : 'bg-rose-50/30 dark:bg-rose-950/10'
-
+// ---------------------------------------------------------------------------
+// Confidence cell renderer
+// ---------------------------------------------------------------------------
+function ConfidenceRenderer({ data }: ICellRendererParams) {
+  const pct = Math.round((data as FlatRow).__meta.confidenceScore * 100)
+  const color = pct >= 90 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-400' : 'bg-rose-400'
   return (
-    <tr className={`${rowBg} group`}>
-      {/* Row number */}
-      <td
-        className="sticky left-0 z-10 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 px-3 py-2 text-right font-mono text-slate-400 dark:text-slate-500 select-none"
-        style={{ minWidth: '3rem' }}
+    <div className="flex items-center gap-2 px-3 w-full h-full">
+      <div className="flex-1 h-1.5 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums w-7 text-right shrink-0">
+        {(data as FlatRow).__meta.confidenceScore.toFixed(2)}
+      </span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Actions cell renderer (retry button)
+// ---------------------------------------------------------------------------
+interface ActionRendererProps extends ICellRendererParams {
+  onRetry?: (id: string) => void
+  retryingRows: Set<string>
+}
+
+function ActionsRenderer({ data, onRetry, retryingRows }: ActionRendererProps) {
+  const meta      = (data as FlatRow).__meta
+  const backendId = meta.id.replace(/_\d+$/, '')
+  const retrying  = retryingRows.has(backendId)
+
+  if (!onRetry) return null
+  return (
+    <div className="flex items-center justify-center h-full">
+      <button
+        disabled={retrying}
+        onClick={() => onRetry(meta.id)}
+        className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40"
+        title="Retry row"
       >
-        {displayIdx + 1}
-      </td>
-
-      {/* Actions — three-dot menu */}
-      <td className="sticky left-[3rem] z-10 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 px-2 py-2 text-center" style={{ minWidth: '2.5rem' }}>
-        <div className="relative inline-block" ref={menuRef}>
-          <button
-            className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-            onClick={() => setMenuOpen((v) => !v)}
-            aria-label="Row actions"
-          >
-            <MoreVertical className="w-3.5 h-3.5" />
-          </button>
-          {menuOpen && (
-            <div className="absolute left-0 top-full mt-1 z-50 min-w-[9rem] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg py-1">
-              <button
-                className="flex w-full items-center gap-2 px-3 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={isRetrying}
-                onClick={() => {
-                  setMenuOpen(false)
-                  onRetryRow?.(row.id)
-                }}
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin text-blue-500' : 'text-slate-400'}`} />
-                {isRetrying ? 'Retrying…' : 'Retry row'}
-              </button>
-            </div>
-          )}
-        </div>
-      </td>
-
-      {/* Status pill */}
-      <td className="border border-slate-200 dark:border-slate-700 px-3 py-2 whitespace-nowrap">
-        {isCorrect ? (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            correct
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-            failed
-          </span>
-        )}
-      </td>
-
-      {/* Confidence bar */}
-      <td className="border border-slate-200 dark:border-slate-700 px-3 py-2" style={{ minWidth: '8rem' }}>
-        <ConfidenceBar value={row.confidenceScore} />
-      </td>
-
-      {/* Data cells */}
-      {dataCols.map((col) => {
-        const isActive     = activeCol === col
-        const cellEdited   = col in rowEdits
-        const cellValue    = rowEdits[col] ?? row.data[col] ?? ''
-        const isErrorField = row.errorFields?.includes(col) ?? false
-        const warningMsg   = row.cellWarnings?.[col]
-        const severity     = row.cellSeverity?.[col] ?? (isErrorField ? 'error' : null)
-
-        return (
-          <MemoCell
-            key={col}
-            col={col}
-            rowId={row.id}
-            cellValue={cellValue}
-            isActive={isActive}
-            cellEdited={cellEdited}
-            isErrorField={isErrorField}
-            warningMsg={warningMsg}
-            severity={severity}
-            editingValue={isActive ? editingValue : ''}
-            inputRef={inputRef}
-            onCellClick={(c, v) => onCellClick(row.id, c, v)}
-            onTooltipShow={onTooltipShow}
-            onTooltipHide={onTooltipHide}
-            onKeyDown={onKeyDown}
-            onBlur={onBlur}
-            onEditChange={onEditChange}
-          />
-        )
-      })}
-    </tr>
+        <RefreshCw className={`w-3.5 h-3.5 ${retrying ? 'animate-spin text-blue-500' : ''}`} />
+      </button>
+    </div>
   )
-})
+}
 
 // ---------------------------------------------------------------------------
-// ExcelGrid
+// Main ExcelGrid component
 // ---------------------------------------------------------------------------
 export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) {
-  const [editMap, setEditMap]           = useState<Record<string, Record<string, string>>>({})
-  const [activeCell, setActiveCell]     = useState<ActiveCell | null>(null)
-  const [editingValue, setEditingValue] = useState<string>('')
-  const [sort, setSort]                 = useState<SortState | null>(null)
-  const [showSaveToast, setShowSaveToast] = useState(false)
-  const [tooltip, setTooltip]           = useState<TooltipState | null>(null)
-  const [retryingRows, setRetryingRows] = useState<Set<string>>(new Set())
+  const gridRef  = useRef<AgGridReact<FlatRow>>(null)
+  const apiRef   = useRef<GridApi<FlatRow> | null>(null)
 
-  const inputRef    = useRef<HTMLInputElement>(null)
-  const scrollRef   = useRef<HTMLDivElement>(null)
-
-  // Mirrors of state used inside stable callbacks — avoids stale closures
-  // without adding them as useCallback deps (which would recreate the fn every render)
-  const activeCellRef    = useRef(activeCell)
-  const editingValueRef  = useRef(editingValue)
-  const sortedRowsRef    = useRef<GridRow[]>([])
-  activeCellRef.current   = activeCell
-  editingValueRef.current = editingValue
-
-  const dataCols = useMemo(() => deriveColumns(rows), [rows])
-
-  const displayRows = useMemo(() =>
-    rows.map((row) => {
-      const overrides = editMap[row.id] ?? {}
-      return { ...row, data: { ...row.data, ...overrides }, edited: Object.keys(overrides).length > 0 }
-    }),
-  [rows, editMap])
-
-  const sortedRows = useMemo(() =>
-    sort
-      ? [...displayRows].sort((a, b) => {
-          let aVal: string, bVal: string
-          if (sort.col === '__status') {
-            aVal = a.status; bVal = b.status
-          } else if (sort.col === '__confidence') {
-            aVal = String(a.confidenceScore); bVal = String(b.confidenceScore)
-          } else {
-            aVal = a.data[sort.col] ?? ''; bVal = b.data[sort.col] ?? ''
-          }
-          const cmp = aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' })
-          return sort.dir === 'asc' ? cmp : -cmp
-        })
-      : displayRows,
-  [displayRows, sort])
-
-  sortedRowsRef.current = sortedRows
-
-  const rowVirtualizer = useVirtualizer({
-    count: sortedRows.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 36,
-    overscan: 10,
-  })
+  // editedMap: rowId → set of edited col keys
+  const [editedMap,   setEditedMap]   = useState<Record<string, Set<string>>>({})
+  const [tooltip,     setTooltip]     = useState<TooltipState | null>(null)
+  const [retryingRows,setRetryingRows]= useState<Set<string>>(new Set())
+  const [showToast,   setShowToast]   = useState(false)
 
   const totalEdited = useMemo(
-    () => Object.values(editMap).reduce((sum, cols) => sum + Object.keys(cols).length, 0),
-    [editMap]
+    () => Object.values(editedMap).reduce((s, cols) => s + cols.size, 0),
+    [editedMap],
   )
 
-  useEffect(() => {
-    if (activeCell && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
-    }
-  }, [activeCell])
+  // Derive flat rows for AG Grid
+  const flatRows = useMemo(() => rows.map(toFlatRow), [rows])
 
-  // Stable commitEdit — only depends on rows (not activeCell/editingValue)
-  const commitEdit = useCallback((rowId: string, col: string, value: string) => {
-    const originalRow = rows.find((r) => r.id === rowId)
-    if (!originalRow) return
-    const original = originalRow.data[col] ?? ''
-    setEditMap((prev) => {
-      const rowEdits = { ...(prev[rowId] ?? {}) }
-      if (value === original) {
-        delete rowEdits[col]
+  // Derive data columns
+  const dataCols = useMemo(() => deriveColumns(rows), [rows])
+
+  // Column definitions
+  const colDefs = useMemo<ColDef<FlatRow>[]>(() => {
+    const fixed: ColDef<FlatRow>[] = [
+      {
+        headerName: '#',
+        field: '__id' as keyof FlatRow as string,
+        width: 52,
+        pinned: 'left',
+        sortable: false,
+        editable: false,
+        suppressMovable: true,
+        headerClass: '!justify-end',
+        cellStyle: { justifyContent: 'flex-end', padding: '0 8px', fontFamily: 'monospace', fontSize: '12px', color: '#94a3b8' },
+        valueGetter: (p) => (p.node?.rowIndex ?? 0) + 1,
+      },
+      {
+        headerName: '',
+        colId: '__actions',
+        width: 44,
+        pinned: 'left',
+        sortable: false,
+        editable: false,
+        suppressMovable: true,
+        cellRenderer: 'actionsRenderer',
+        cellStyle: { padding: 0, justifyContent: 'center' },
+      },
+      {
+        headerName: 'Status',
+        colId: '__status',
+        width: 100,
+        sortable: true,
+        editable: false,
+        cellRenderer: 'statusRenderer',
+        valueGetter: (p) => (p.data as FlatRow).__meta.status,
+        cellStyle: { padding: 0 },
+      },
+      {
+        headerName: 'Confidence',
+        colId: '__confidence',
+        width: 140,
+        sortable: true,
+        editable: false,
+        cellRenderer: 'confidenceRenderer',
+        valueGetter: (p) => (p.data as FlatRow).__meta.confidenceScore,
+        cellStyle: { padding: 0 },
+      },
+    ]
+
+    const data: ColDef<FlatRow>[] = dataCols.map((col) => ({
+      headerName: col.replace(/_/g, ' '),
+      field: col,
+      width: 160,
+      editable: true,
+      sortable: true,
+      resizable: true,
+      wrapText: false,
+      cellRenderer: 'dataCellRenderer',
+      cellRendererParams: { col, setTooltip, editedMap },
+      cellClassRules: makeCellClassRules(col, editedMap),
+      valueGetter: (p) => (p.data as FlatRow)?.[col] ?? '',
+      valueSetter: (p) => {
+        ;(p.data as FlatRow)[col] = p.newValue
+        return true
+      },
+    }))
+
+    return [...fixed, ...data]
+  }, [dataCols, editedMap, setTooltip])
+
+  // Track edits
+  const onCellValueChanged = useCallback((e: CellValueChangedEvent<FlatRow>) => {
+    if (!e.colDef.field || e.colDef.field.startsWith('__')) return
+    const col      = e.colDef.field
+    const meta     = (e.data as FlatRow).__meta
+    const original = meta.data[col] ?? ''
+    const newVal   = e.newValue ?? ''
+
+    lastEditedId.current = meta.id
+
+    setEditedMap((prev) => {
+      const colSet = new Set(prev[meta.id] ?? [])
+      if (newVal === original) {
+        colSet.delete(col)
       } else {
-        rowEdits[col] = value
+        colSet.add(col)
       }
-      if (Object.keys(rowEdits).length === 0) {
-        const next = { ...prev }
-        delete next[rowId]
-        return next
-      }
-      return { ...prev, [rowId]: rowEdits }
+      const next = { ...prev }
+      if (colSet.size === 0) delete next[meta.id]
+      else next[meta.id] = colSet
+      return next
     })
-  }, [rows])
-
-  // Stable handlers using refs for current activeCell / editingValue
-  const handleCellClick = useCallback((rowId: string, col: string, currentValue: string) => {
-    const prev = activeCellRef.current
-    if (prev) commitEdit(prev.rowId, prev.col, editingValueRef.current)
-    setActiveCell({ rowId, col })
-    setEditingValue(currentValue)
-  }, [commitEdit])
-
-  const handleBlur = useCallback(() => {
-    const cell = activeCellRef.current
-    if (cell) {
-      commitEdit(cell.rowId, cell.col, editingValueRef.current)
-      setActiveCell(null)
-    }
-  }, [commitEdit])
-
-  const handleKeyDown = useCallback((
-    e: React.KeyboardEvent<HTMLInputElement>,
-    col: string,
-  ) => {
-    const cell = activeCellRef.current
-    if (!cell) return
-    const { rowId } = cell
-
-    if (e.key === 'Escape') {
-      const originalRow = sortedRowsRef.current.find((r) => r.id === rowId)
-      setEditingValue(originalRow?.data[col] ?? '')
-      setEditMap((prev) => {
-        const rowEdits = { ...(prev[rowId] ?? {}) }
-        delete rowEdits[col]
-        if (Object.keys(rowEdits).length === 0) {
-          const next = { ...prev }; delete next[rowId]; return next
-        }
-        return { ...prev, [rowId]: rowEdits }
-      })
-      setActiveCell(null)
-      return
-    }
-
-    if (e.key === 'Tab' || e.key === 'Enter') {
-      e.preventDefault()
-      commitEdit(rowId, col, editingValueRef.current)
-
-      const sorted = sortedRowsRef.current
-      const colIdx = dataCols.indexOf(col)
-      const rowIdx = sorted.findIndex((r) => r.id === rowId)
-
-      let nextRowIdx = rowIdx, nextColIdx = colIdx
-      if (e.key === 'Tab') {
-        if (e.shiftKey) {
-          nextColIdx = colIdx - 1
-          if (nextColIdx < 0) { nextColIdx = dataCols.length - 1; nextRowIdx = rowIdx - 1 }
-        } else {
-          nextColIdx = colIdx + 1
-          if (nextColIdx >= dataCols.length) { nextColIdx = 0; nextRowIdx = rowIdx + 1 }
-        }
-      } else {
-        nextRowIdx = rowIdx + 1
-      }
-
-      if (nextRowIdx >= 0 && nextRowIdx < sorted.length) {
-        const nextRow = sorted[nextRowIdx]
-        const nextCol = dataCols[nextColIdx] ?? dataCols[0]
-        const nextVal = (editMap[nextRow.id]?.[nextCol] ?? nextRow.data[nextCol]) || ''
-        setActiveCell({ rowId: nextRow.id, col: nextCol })
-        setEditingValue(nextVal)
-      } else {
-        setActiveCell(null)
-      }
-    }
-  }, [dataCols, commitEdit, editMap])
-
-  const handleTooltipShow = useCallback((x: number, y: number, msg: string, sev: 'error' | 'warning') => {
-    setTooltip({ x, y, msg, severity: sev })
   }, [])
 
-  const handleTooltipHide = useCallback(() => setTooltip(null), [])
-  const handleEditChange  = useCallback((v: string) => setEditingValue(v), [])
-
-  function handleSort(col: string) {
-    setSort((prev) => {
-      if (prev?.col === col) return { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-      return { col, dir: 'asc' }
+  // Refresh only the last-edited row instead of the entire grid
+  const lastEditedId = useRef<string | null>(null)
+  useEffect(() => {
+    const api = apiRef.current
+    if (!api || !lastEditedId.current) return
+    const id = lastEditedId.current
+    api.forEachNode((node) => {
+      if ((node.data as FlatRow)?.__meta.id === id) {
+        api.refreshCells({ rowNodes: [node], force: true })
+      }
     })
-  }
+  }, [editedMap])
 
-  const handleSave = useCallback(() => {
-    const editedRows = rows
-      .filter((row) => editMap[row.id])
-      .map((row) => ({ ...row, data: { ...row.data, ...(editMap[row.id] ?? {}) }, edited: true }))
-    onSave(editedRows)
-    setEditMap({})
-    setActiveCell(null)
-    setShowSaveToast(true)
-    setTimeout(() => setShowSaveToast(false), 2000)
-  }, [rows, editMap, onSave])
-
-  function handleReset() {
-    setEditMap({})
-    setActiveCell(null)
-    setEditingValue('')
-  }
+  const handleGridReady = useCallback((e: GridReadyEvent) => {
+    apiRef.current = e.api
+  }, [])
 
   const handleRetryRow = useCallback(async (rowId: string) => {
     if (!onRetryRow) return
-    // Strip variant suffix to get the real backend id
     const backendId = rowId.replace(/_\d+$/, '')
     setRetryingRows((prev) => new Set(prev).add(backendId))
     try {
       await onRetryRow(backendId)
     } finally {
-      setRetryingRows((prev) => {
-        const next = new Set(prev)
-        next.delete(backendId)
-        return next
-      })
+      setRetryingRows((prev) => { const n = new Set(prev); n.delete(backendId); return n })
     }
   }, [onRetryRow])
 
-  function SortIcon({ col }: { col: string }) {
-    if (sort?.col !== col) return <ChevronDown className="w-3 h-3 text-slate-300 dark:text-slate-600 opacity-50" />
-    return sort.dir === 'asc'
-      ? <ChevronUp className="w-3 h-3 text-slate-500 dark:text-slate-400" />
-      : <ChevronDown className="w-3 h-3 text-slate-500 dark:text-slate-400" />
+  function handleSave() {
+    if (!apiRef.current) return
+    const edited: GridRow[] = []
+    apiRef.current.forEachNode((node) => {
+      const flat = node.data as FlatRow
+      const meta = flat.__meta
+      if (!editedMap[meta.id]) return
+      const updatedData = { ...meta.data }
+      for (const col of Array.from(editedMap[meta.id])) {
+        updatedData[col] = String(flat[col] ?? '')
+      }
+      edited.push({ ...meta, data: updatedData, edited: true })
+    })
+    onSave(edited)
+    setEditedMap({})
+    setShowToast(true)
+    setTimeout(() => setShowToast(false), 2000)
   }
+
+  function handleReset() {
+    // Re-derive flat rows from original GridRow data
+    if (!apiRef.current) return
+    apiRef.current.forEachNode((node) => {
+      const flat = node.data as FlatRow
+      const meta = flat.__meta
+      Object.assign(flat, meta.data)
+    })
+    apiRef.current.refreshCells({ force: true })
+    setEditedMap({})
+  }
+
+  const getRowId = useCallback((p: GetRowIdParams<FlatRow>) => p.data.__id, [])
+
+  // Memoize components map — prevents AG Grid re-instantiating renderers on every render
+  const gridComponents = useMemo(() => ({
+    actionsRenderer:    (p: ICellRendererParams) =>
+      ActionsRenderer({ ...p, onRetry: onRetryRow ? handleRetryRow : undefined, retryingRows }),
+    statusRenderer:     StatusRenderer,
+    confidenceRenderer: ConfidenceRenderer,
+    dataCellRenderer:   DataCellRenderer,
+  }), [handleRetryRow, onRetryRow, retryingRows])
 
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
-      {/* Grid wrapper — both axes scrollable */}
-      <div ref={scrollRef} className="flex-1 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm bg-white dark:bg-slate-900">
-        <table className="border-collapse text-xs" style={{ minWidth: 'max-content' }}>
-          {/* HEADER */}
-          <thead>
-            <tr>
-              <th
-                className="sticky left-0 top-0 z-30 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2 text-right font-medium text-slate-400 dark:text-slate-400 select-none"
-                style={{ minWidth: '3rem' }}
-              >#</th>
-              <th
-                className="sticky left-[3rem] top-0 z-30 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-2 text-xs font-medium uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap select-none text-center"
-                style={{ minWidth: '2.5rem' }}
-              />
-              <th
-                className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400 whitespace-nowrap cursor-pointer select-none hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                style={{ minWidth: '6rem' }}
-                onClick={() => handleSort('__status')}
-              >
-                <div className="flex items-center gap-1">Status <SortIcon col="__status" /></div>
-              </th>
-              <th
-                className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400 whitespace-nowrap cursor-pointer select-none hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                style={{ minWidth: '8rem' }}
-                onClick={() => handleSort('__confidence')}
-              >
-                <div className="flex items-center gap-1">Confidence <SortIcon col="__confidence" /></div>
-              </th>
-              {dataCols.map((col) => (
-                <th
-                  key={col}
-                  className="sticky top-0 z-20 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400 whitespace-nowrap cursor-pointer select-none hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                  style={{ minWidth: '9rem' }}
-                  onClick={() => handleSort(col)}
-                >
-                  <div className="flex items-center gap-1">
-                    {col.replace(/_/g, ' ')}
-                    <SortIcon col={col} />
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
+      {/* AG Grid container */}
+      <div className="flex-1 min-h-0 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+        <style>{`
+          /* ── Light mode ─────────────────────────────────────────── */
+          .ag-theme-swallow {
+            --ag-background-color:              #ffffff;
+            --ag-foreground-color:              #374151;
+            --ag-header-background-color:       #f1f5f9;
+            --ag-header-foreground-color:       #6b7280;
+            --ag-border-color:                  #e2e8f0;
+            --ag-row-border-color:              #e2e8f0;
+            --ag-row-border-width:              1px;
+            --ag-row-border-style:              solid;
+            --ag-cell-horizontal-border:        solid 1px #e2e8f0;
+            --ag-row-hover-color:               #f8fafc;
+            --ag-selected-row-background-color: #eff6ff;
+            --ag-odd-row-background-color:      #ffffff;
+            --ag-cell-horizontal-padding:       0px;
+            --ag-cell-vertical-padding:         0px;
+            --ag-row-height:                    36px;
+            --ag-header-height:                 38px;
+            --ag-font-size:                     12px;
+            --ag-font-family:                   ui-monospace, SFMono-Regular, Menlo, monospace;
+            --ag-header-column-separator-display: block;
+            --ag-header-column-separator-height:  60%;
+            --ag-header-column-separator-width:   1px;
+            --ag-header-column-separator-color:   #cbd5e1;
+            --ag-header-column-resize-handle-display: block;
+            --ag-header-column-resize-handle-height:  40%;
+            --ag-header-column-resize-handle-width:   2px;
+            --ag-header-column-resize-handle-color:   #94a3b8;
+          }
 
-          {/* BODY — virtualized */}
-          <tbody>
-            {rowVirtualizer.getVirtualItems()[0]?.start > 0 && (
-              <tr style={{ height: rowVirtualizer.getVirtualItems()[0].start }}>
-                <td colSpan={dataCols.length + 4} />
-              </tr>
-            )}
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const row = sortedRows[virtualRow.index]
-              const backendId = row.id.replace(/_\d+$/, '')
-              return (
-                <MemoRow
-                  key={row.id}
-                  row={row}
-                  displayIdx={virtualRow.index}
-                  dataCols={dataCols}
-                  activeCol={activeCell?.rowId === row.id ? activeCell.col : null}
-                  rowEdits={editMap[row.id] ?? {}}
-                  editingValue={activeCell?.rowId === row.id ? editingValue : ''}
-                  isRetrying={retryingRows.has(backendId)}
-                  inputRef={inputRef}
-                  onCellClick={handleCellClick}
-                  onTooltipShow={handleTooltipShow}
-                  onTooltipHide={handleTooltipHide}
-                  onKeyDown={handleKeyDown}
-                  onBlur={handleBlur}
-                  onEditChange={handleEditChange}
-                  onRetryRow={onRetryRow ? handleRetryRow : undefined}
-                />
-              )
-            })}
-            {(() => {
-              const items = rowVirtualizer.getVirtualItems()
-              const lastItem = items[items.length - 1]
-              const paddingBottom = lastItem ? rowVirtualizer.getTotalSize() - lastItem.end : 0
-              return paddingBottom > 0 ? (
-                <tr style={{ height: paddingBottom }}>
-                  <td colSpan={dataCols.length + 4} />
-                </tr>
-              ) : null
-            })()}
-          </tbody>
-        </table>
+          /* ── Dark mode ───────────────────────────────────────────── */
+          .dark .ag-theme-swallow {
+            --ag-background-color:              #0f172a;
+            --ag-foreground-color:              #cbd5e1;
+            --ag-header-background-color:       #1e293b;
+            --ag-header-foreground-color:       #94a3b8;
+            --ag-border-color:                  #334155;
+            --ag-row-border-color:              #334155;
+            --ag-cell-horizontal-border:        solid 1px #334155;
+            --ag-row-hover-color:               #1e293b;
+            --ag-selected-row-background-color: #1e3a5f;
+            --ag-odd-row-background-color:      #0f172a;
+            --ag-header-column-separator-color: #334155;
+            --ag-header-column-resize-handle-color: #475569;
+          }
+
+          /* ── Remove double outer border ─────────────────────────── */
+          .ag-theme-swallow .ag-root-wrapper { border: none !important; }
+
+          /* ── Every cell: flex, vertically centered, explicit borders */
+          .ag-theme-swallow .ag-cell {
+            display: flex !important;
+            align-items: center !important;
+            padding: 0 !important;
+            border-right: 1px solid var(--ag-border-color) !important;
+            border-bottom: 1px solid var(--ag-row-border-color) !important;
+            overflow: hidden;
+          }
+
+          /* ── Header cells: flex centered + right border ─────────── */
+          .ag-theme-swallow .ag-header-cell {
+            display: flex !important;
+            align-items: center !important;
+            border-right: 1px solid var(--ag-border-color) !important;
+          }
+          .ag-theme-swallow .ag-header-cell-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 0 8px;
+            width: 100%;
+          }
+
+          /* ── Inline editor ───────────────────────────────────────── */
+          .ag-theme-swallow .ag-cell-inline-editing {
+            display: flex !important;
+            align-items: center !important;
+            padding: 0 !important;
+            background: var(--ag-background-color) !important;
+            outline: 2px solid #3b82f6 !important;
+            outline-offset: -2px;
+            border-radius: 0;
+            overflow: visible !important;
+            z-index: 10;
+          }
+          .ag-theme-swallow .ag-cell-inline-editing input,
+          .ag-theme-swallow .ag-cell-inline-editing .ag-input-field-input {
+            width: 100%;
+            height: 100%;
+            padding: 0 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px;
+            color: var(--ag-foreground-color);
+            background: transparent;
+            border: none !important;
+            outline: none !important;
+          }
+
+          /* ── Cell highlight classes (replaces per-cell cellStyle functions) ── */
+          .ag-theme-swallow .ag-cell.cell-edited   { background: rgb(255 251 235 / 0.8) !important; }
+          .ag-theme-swallow .ag-cell.cell-error    { background: rgb(255 241 242 / 0.7) !important; }
+          .ag-theme-swallow .ag-cell.cell-warning  { background: rgb(255 251 235 / 0.6) !important; }
+          .dark .ag-theme-swallow .ag-cell.cell-edited  { background: rgb(120 100 20 / 0.25) !important; }
+          .dark .ag-theme-swallow .ag-cell.cell-error   { background: rgb(120 20 30 / 0.3)  !important; }
+          .dark .ag-theme-swallow .ag-cell.cell-warning { background: rgb(120 80 10 / 0.25) !important; }
+
+          /* ── Sort icon color ────────────────────────────────────── */
+          .ag-theme-swallow .ag-sort-indicator-icon .ag-icon { color: #64748b; }
+
+          /* ── Pinned column shadow ───────────────────────────────── */
+          .ag-theme-swallow .ag-pinned-left-cols-container {
+            box-shadow: 2px 0 4px -1px rgba(0,0,0,0.08);
+          }
+          .dark .ag-theme-swallow .ag-pinned-left-cols-container {
+            box-shadow: 2px 0 6px -1px rgba(0,0,0,0.4);
+          }
+
+          /* ── Status badge ────────────────────────────────────────── */
+          .swallow-status-cell {
+            display: flex;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+            padding: 0 8px;
+          }
+          .swallow-badge-correct,
+          .swallow-badge-failed {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 500;
+            font-family: inherit;
+            white-space: nowrap;
+          }
+          /* Light */
+          .swallow-badge-correct { background: #d1fae5; color: #065f46; }
+          .swallow-badge-failed  { background: #ffe4e6; color: #9f1239; }
+          .swallow-dot-correct   { width: 6px; height: 6px; border-radius: 50%; background: #10b981; flex-shrink: 0; }
+          .swallow-dot-failed    { width: 6px; height: 6px; border-radius: 50%; background: #f43f5e; flex-shrink: 0; }
+          /* Dark */
+          .dark .swallow-badge-correct { background: rgba(16,185,129,0.15); color: #34d399; }
+          .dark .swallow-badge-failed  { background: rgba(244,63,94,0.15);  color: #fb7185; }
+          .dark .swallow-dot-correct   { background: #34d399; }
+          .dark .swallow-dot-failed    { background: #fb7185; }
+        `}</style>
+
+        <AgGridReact<FlatRow>
+          ref={gridRef}
+          className="ag-theme-swallow h-full w-full"
+          rowData={flatRows}
+          columnDefs={colDefs}
+          getRowId={getRowId}
+          onGridReady={handleGridReady}
+          onCellValueChanged={onCellValueChanged}
+          suppressMovableColumns={false}
+          suppressColumnVirtualisation={false}
+          animateRows={false}
+          rowHeight={36}
+          headerHeight={38}
+          defaultColDef={{
+            sortable: true,
+            resizable: true,
+            editable: false,
+            suppressHeaderMenuButton: true,
+            icons: {
+              sortAscending: () => {
+                const el = document.createElement('span')
+                el.innerHTML = '↑'
+                el.className = 'text-slate-500 text-xs'
+                return el
+              },
+              sortDescending: () => {
+                const el = document.createElement('span')
+                el.innerHTML = '↓'
+                el.className = 'text-slate-500 text-xs'
+                return el
+              },
+            },
+          }}
+          components={gridComponents}
+        />
       </div>
 
       {/* Bottom action bar */}
@@ -648,20 +653,20 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
       )}
 
       {/* Save success toast */}
-      {showSaveToast && (
+      {showToast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl bg-emerald-600 text-white text-sm font-medium shadow-lg shadow-emerald-500/30 flex items-center gap-2 pointer-events-none">
           <span className="w-4 h-4 rounded-full border-2 border-white flex items-center justify-center text-xs">✓</span>
           Changes saved successfully
         </div>
       )}
 
-      {/* Cell warning tooltip */}
+      {/* Cell warning tooltip — fixed-position, never clipped by scroll */}
       {tooltip && (() => {
         const isWarn = tooltip.severity === 'warning'
-        const bg    = isWarn ? 'bg-amber-900 dark:bg-amber-950' : 'bg-rose-900 dark:bg-rose-950'
-        const text  = isWarn ? 'text-amber-100' : 'text-rose-100'
-        const dot   = isWarn ? 'bg-amber-400' : 'bg-rose-400'
-        const arrow = isWarn ? 'border-t-amber-900 dark:border-t-amber-950' : 'border-t-rose-900 dark:border-t-rose-950'
+        const bg     = isWarn ? 'bg-amber-900' : 'bg-rose-900'
+        const text   = isWarn ? 'text-amber-100' : 'text-rose-100'
+        const dot    = isWarn ? 'bg-amber-400' : 'bg-rose-400'
+        const arrow  = isWarn ? 'border-t-amber-900' : 'border-t-rose-900'
         return (
           <div
             className="fixed z-[9999] pointer-events-none flex flex-col items-center"
@@ -675,6 +680,7 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
           </div>
         )
       })()}
+
     </div>
   )
 }
