@@ -24,8 +24,10 @@ import {
   RotateCcw,
   Clock,
   AlertTriangle,
+  Download,
 } from 'lucide-react'
 import Button from '../components/ui/Button'
+import WalkingPets from '../components/ui/WalkingPets'
 import type { MigrationType, InputFormat } from '../types'
 
 type CrawlState = 'idle' | 'crawling' | 'stopping' | 'paused' | 'completed' | 'error'
@@ -72,13 +74,13 @@ const migrationTypes: MigrationTypeOption[] = [
 ]
 
 const inputFormats: InputFormatOption[] = [
-  { value: 'json',         label: 'JSON',         icon: FileText,  desc: 'Structured JSON data' },
-  { value: 'csv',          label: 'CSV',          icon: FileText,  desc: 'Comma-separated values' },
-  { value: 'xml',          label: 'XML',          icon: FileText,  desc: 'XML / SOAP format' },
-  { value: 'text',         label: 'Text',         icon: FileText,  desc: 'Plain text lines' },
-  { value: 'raw_text',     label: 'Raw Text',     icon: FileText,  desc: 'Unstructured raw data' },
-  { value: 'google_sheet', label: 'Google Sheet', icon: Sheet,     desc: 'Import via Sheets URL' },
-  { value: 'ai_parser',    label: 'AI Parser',    icon: Sparkles,  desc: 'Let AI figure it out' },
+  { value: 'json', label: 'JSON', icon: FileText, desc: 'Structured JSON data' },
+  { value: 'csv', label: 'CSV', icon: FileText, desc: 'Comma-separated values' },
+  { value: 'xml', label: 'XML', icon: FileText, desc: 'XML / SOAP format' },
+  { value: 'text', label: 'Text', icon: FileText, desc: 'Plain text lines' },
+  { value: 'raw_text', label: 'Raw Text', icon: FileText, desc: 'Unstructured raw data' },
+  { value: 'google_sheet', label: 'Google Sheet', icon: Sheet, desc: 'Import via Sheets URL' },
+  { value: 'ai_parser', label: 'AI Parser', icon: Sparkles, desc: 'Let AI figure it out' },
 ]
 
 const placeholders: Record<InputFormat, string> = {
@@ -114,6 +116,12 @@ export default function NewMigration() {
   const location = useLocation()
   const prefillUrl = (location.state as { prefillUrl?: string } | null)?.prefillUrl ?? ''
   const pageRef = usePageAnimation()
+
+  // Clear location state so refreshing / re-entering the page starts clean
+  useEffect(() => {
+    if (prefillUrl) window.history.replaceState({}, '')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { user } = useAuth()
 
@@ -131,50 +139,71 @@ export default function NewMigration() {
 
 
   // ── Crawler state ──────────────────────────────────────────────────────
-  const [crawlState, setCrawlState]     = useState<CrawlState>('idle')
-  const [crawlStats, setCrawlStats]     = useState({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '' })
-  const [_crawlJobId, setCrawlJobId]    = useState<string | null>(null)
-  const [urlSession, setUrlSession]     = useState<{ productsCount: number; savedAt: string } | null>(null)
-  const [maxPages, setMaxPages]         = useState(100)
-  const [maxDepth, setMaxDepth]         = useState(5)
-  const [maxProducts, setMaxProducts]   = useState(0)
-  const [crawlError, setCrawlError]     = useState('')
-  const crawlIntervalRef                = useRef<ReturnType<typeof setInterval> | null>(null)
-  const sessionCheckedUrl               = useRef('')
+  const [crawlState, setCrawlState] = useState<CrawlState>('idle')
+  const [crawlStats, setCrawlStats] = useState({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
+  const [crawlJobId, setCrawlJobId] = useState<string | null>(null)
+  const [urlSession, setUrlSession] = useState<{ productsCount: number; savedAt: string } | null>(null)
+  const [maxPages, setMaxPages] = useState(100)
+  const [maxDepth, setMaxDepth] = useState(5)
+  const [maxProducts, setMaxProducts] = useState(0)
+  const [crawlError, setCrawlError] = useState('')
+  const [extending, setExtending] = useState(false)
+  const [extendCount, setExtendCount] = useState(50)
+  const crawlIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const sessionCheckedUrl = useRef('')
 
-  // Poll crawl status while active
+  // On mount: hydrate only if a crawl is actively running right now
+  useEffect(() => {
+    crawlApi.getStatus().then((d) => {
+      // Only restore for in-progress states — completed/paused/error start fresh
+      if (d.status !== 'crawling' && d.status !== 'stopping') return
+      setCrawlStats({
+        pagesVisited:    d.pages_visited          ?? 0,
+        productsScraped: d.products_scraped       ?? d.products_count ?? 0,
+        elapsedSeconds:  d.elapsed_seconds        ?? 0,
+        currentUrl:      d.current_url            ?? d.url ?? '',
+        totalProducts:   d.total_input_products   ?? 0,
+      })
+      if (d.job_id) setCrawlJobId(d.job_id)
+      if (d.url)    setWebsiteUrl((prev) => prev || d.url!)
+      setCrawlState(d.status)
+    }).catch(() => { /* backend unreachable — stay idle */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Poll /crawl/status while active (crawling or stopping)
   useEffect(() => {
     if (crawlState !== 'crawling' && crawlState !== 'stopping') return
     crawlIntervalRef.current = setInterval(async () => {
       try {
         const d = await crawlApi.getStatus()
         const stats = {
-          pagesVisited:    d.pages_visited ?? 0,
-          productsScraped: d.products_scraped ?? d.products_count ?? 0,
-          elapsedSeconds:  d.elapsed_seconds ?? 0,
-          currentUrl:      d.current_url ?? d.url ?? '',
+          pagesVisited:    d.pages_visited        ?? 0,
+          productsScraped: d.products_scraped     ?? d.products_count ?? 0,
+          elapsedSeconds:  d.elapsed_seconds      ?? 0,
+          currentUrl:      d.current_url          ?? d.url ?? '',
+          totalProducts:   d.total_input_products ?? 0,
         }
         setCrawlStats(stats)
         if (d.job_id) setCrawlJobId(d.job_id)
-        const nextStatus = (d.status && d.status !== crawlState) ? d.status : crawlState
-        if (d.status && d.status !== crawlState) setCrawlState(d.status)
-        if (user && websiteUrl) {
-          storeCrawlSession(user.id, {
-            url:             websiteUrl,
-            startedAt:       new Date().toISOString(),
-            status:          nextStatus as import('../types').CrawlSessionStatus,
-            pagesVisited:    stats.pagesVisited,
-            productsScraped: stats.productsScraped,
-            elapsedSeconds:  stats.elapsedSeconds,
-            jobId:           d.job_id ?? null,
-          })
+        // Sync UI state with backend status
+        if (d.status && d.status !== crawlState) {
+          setCrawlState(d.status)
+          if (user && websiteUrl) {
+            storeCrawlSession(user.id, {
+              url: websiteUrl, startedAt: new Date().toISOString(),
+              status: d.status as import('../types').CrawlSessionStatus,
+              pagesVisited: stats.pagesVisited, productsScraped: stats.productsScraped,
+              elapsedSeconds: stats.elapsedSeconds, jobId: d.job_id ?? null,
+            })
+          }
         }
-      } catch { /* ignore transient poll errors */ }
-    }, 3000)
+      } catch { /* ignore transient errors */ }
+    }, 2000)
     return () => { if (crawlIntervalRef.current) clearInterval(crawlIntervalRef.current) }
   }, [crawlState, websiteUrl, user])
 
-  // Check URL for existing session whenever URL changes
+  // Check for existing session when URL changes
   useEffect(() => {
     if (!websiteUrl || !websiteUrl.startsWith('http') || websiteUrl === sessionCheckedUrl.current) return
     sessionCheckedUrl.current = websiteUrl
@@ -184,11 +213,18 @@ export default function NewMigration() {
   }, [websiteUrl])
 
   // ── Crawl actions ──────────────────────────────────────────────────────
+
   async function handleStartCrawl() {
     if (!websiteUrl.startsWith('http')) { setErrors({ url: 'URL must start with http:// or https://' }); return }
+    if (maxProducts <= 0) { setErrors({ url: 'Max Products must be > 0 to start a crawl.' }); return }
+    // Build unique name: use jobName if set, otherwise derive from hostname + date
+    const crawlName = jobName.trim() ||
+      websiteUrl.replace(/^https?:\/\//, '').split('/')[0].replace(/\W+/g, '-').toLowerCase() +
+      '-' + new Date().toISOString().slice(0, 7)
+    localStorage.setItem('swallow_crawl_settings', JSON.stringify({ maxProducts, maxPages, maxDepth }))
     setCrawlState('crawling')
     setUrlSession(null)
-    setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '' })
+    setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
     setCrawlError('')
     if (user) {
       storeCrawlSession(user.id, {
@@ -197,28 +233,99 @@ export default function NewMigration() {
       })
     }
     try {
-      const d = await crawlApi.start(websiteUrl, { max_pages: maxPages, max_depth: maxDepth, max_products: maxProducts })
+      const d = await crawlApi.start(websiteUrl, {
+        name:         crawlName,
+        max_products: maxProducts,
+        max_pages:    maxPages,
+        max_depth:    maxDepth,
+      })
       if (d.job_id) setCrawlJobId(d.job_id)
-      if (d.status === 'already_running') { setCrawlState('idle'); setCrawlError('A crawl is already running. Stop it first.') }
+      if (d.status === 'already_running') {
+        setCrawlState('idle')
+        setCrawlError('A crawl is already running. Stop it first.')
+      }
     } catch (err) {
       setCrawlState('error')
       setCrawlError(err instanceof Error ? err.message : 'Failed to start crawl')
-      if (user) storeCrawlSession(user.id, { url: websiteUrl, startedAt: new Date().toISOString(), status: 'error', pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0 })
+      if (user) storeCrawlSession(user.id, {
+        url: websiteUrl, startedAt: new Date().toISOString(),
+        status: 'error', pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0,
+      })
     }
   }
 
+  /** POST /crawl/control/stop */
   async function handleStopCrawl() {
     setCrawlState('stopping')
-    try { await crawlApi.stop() } catch { setCrawlState('crawling') }
+    setCrawlError('')
+    try {
+      const d = await crawlApi.stop()
+      if (d.status === 'no_active_crawl') {
+        setCrawlState('idle')
+        setCrawlError('No active crawl to stop.')
+      }
+      // 'stopped' → stay in stopping; poll will confirm transition to 'paused'
+      // 'already_stopping' → stay in stopping; already in progress
+    } catch { setCrawlState('crawling') }
   }
 
+  /** POST /crawl/control/continue — no URL param needed */
   async function handleResumeCrawl() {
     setCrawlState('crawling')
     setUrlSession(null)
+    setCrawlError('')
     try {
-      const d = await crawlApi.resume(websiteUrl)
+      const d = await crawlApi.resume()
       if (d.job_id) setCrawlJobId(d.job_id)
+      if (d.status === 'already_running') {
+        // Already going — stay in crawling
+      } else if (d.status === 'still_stopping') {
+        setCrawlState('stopping')
+        setCrawlError('Previous crawl is still saving — wait a moment and try again.')
+      } else if (d.status === 'not_stopped' || d.status === 'no_session_data') {
+        setCrawlState('idle')
+        setUrlSession(null)
+        setCrawlError('No saved session found for this URL.')
+      }
+      // 'resuming' → crawling, poll takes over
     } catch { setCrawlState('paused') }
+  }
+
+  /** POST /crawl/extend — scrape additional NEW products from a completed job.
+   *  /crawl/extend is a BLOCKING endpoint (returns only when done), so we fire
+   *  it without awaiting and let the status poll track live progress. */
+  async function handleExtendCrawl() {
+    if (extending) return
+    setExtending(true)
+    setCrawlError('')
+
+    // Resolve job_id — fall back to live status if crawlJobId is not cached
+    let jobId = crawlJobId
+    if (!jobId) {
+      try {
+        const s = await crawlApi.getStatus()
+        jobId = s.job_id ?? null
+        if (jobId) setCrawlJobId(jobId)
+      } catch { /* ignore */ }
+    }
+    if (!jobId) {
+      setCrawlError('No job ID found. Start or complete a crawl first.')
+      setExtending(false)
+      return
+    }
+
+    // Flip UI into crawling mode immediately so the poll kicks in
+    setCrawlState('crawling')
+    setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
+    setExtending(false)
+
+    // Fire-and-forget — the blocking response arrives when done
+    crawlApi.extend(jobId, extendCount)
+      .then((d) => { if (d.job_id) setCrawlJobId(d.job_id) })
+      .catch((err) => {
+        setCrawlError(err instanceof Error ? err.message : 'Extend failed')
+        setCrawlState('completed')
+      })
   }
 
   function goToStep2() {
@@ -266,8 +373,8 @@ export default function NewMigration() {
           : websiteUrl.trim() || rawData.trim()
         const effectiveInputType: InputFormat =
           inputFormat === 'google_sheet' ? 'google_sheet'
-          : websiteUrl.trim() && !rawData.trim() ? 'website_url' as InputFormat
-          : inputFormat
+            : websiteUrl.trim() && !rawData.trim() ? 'website_url' as InputFormat
+              : inputFormat
         const res = await migrationApi.start(
           { job_name: jobName, migration_type: migrationType, input_type: effectiveInputType, data },
           userId
@@ -297,12 +404,12 @@ export default function NewMigration() {
   return (
     <div ref={pageRef} className="min-h-screen relative z-10">
       {/* Header */}
-      <div className="px-8 pt-10 pb-6 themed-header">
+      <div className="px-4 sm:px-8 pt-6 sm:pt-10 pb-6 themed-header">
         <div className="max-w-5xl mx-auto">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1">
             New Migration
           </p>
-          <h1 className="text-3xl font-light tracking-tight text-black dark:text-white">
+          <h1 className="text-2xl sm:text-3xl font-light tracking-tight text-black dark:text-white">
             {step === 1 ? 'Website Crawler' : 'Job Details'}
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 font-light mt-1">
@@ -313,7 +420,7 @@ export default function NewMigration() {
         </div>
       </div>
 
-      <div className="px-8 py-8 max-w-5xl mx-auto">
+      <div className="px-4 sm:px-8 py-6 sm:py-8 max-w-5xl mx-auto">
 
         {/* Step indicator — horizontal pill track */}
         <div className="flex items-center gap-0 mb-8 w-fit">
@@ -323,18 +430,16 @@ export default function NewMigration() {
                 <div className={`w-16 h-px mx-1 transition-colors duration-300 ${step > 1 ? 'bg-emerald-400' : 'bg-black/10 dark:bg-white/10'}`} />
               )}
               <div className="flex items-center gap-2">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold transition-all duration-300 ${
-                  step === s
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold transition-all duration-300 ${step === s
                     ? 'bg-[rgb(var(--accent,_0_0_0))] text-[rgb(var(--accent-fg,_255_255_255))] shadow-sm'
                     : step > s
                       ? 'bg-emerald-500 text-white'
                       : 'bg-black/5 dark:bg-white/5 text-slate-400 dark:text-slate-500'
-                }`}>
+                  }`}>
                   {step > s ? <CheckCircle2 className="w-3.5 h-3.5" /> : s}
                 </div>
-                <span className={`text-xs font-medium transition-colors duration-300 ${
-                  step === s ? 'text-slate-800 dark:text-slate-200' : 'text-slate-400 dark:text-slate-500'
-                }`}>
+                <span className={`text-xs font-medium transition-colors duration-300 ${step === s ? 'text-slate-800 dark:text-slate-200' : 'text-slate-400 dark:text-slate-500'
+                  }`}>
                   {s === 1 ? 'Website URL' : 'Job Details'}
                 </span>
               </div>
@@ -366,19 +471,18 @@ export default function NewMigration() {
                       <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Enter a store URL to crawl and extract product data automatically</p>
                     </div>
                     {crawlState !== 'idle' && (
-                      <span className={`ml-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
-                        crawlState === 'crawling'  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400' :
-                        crawlState === 'stopping'  ? 'bg-amber-100  dark:bg-amber-950/60  text-amber-700  dark:text-amber-400'  :
-                        crawlState === 'paused'    ? 'bg-orange-100 dark:bg-orange-950/60 text-orange-700 dark:text-orange-400' :
-                        crawlState === 'completed' ? 'bg-blue-100   dark:bg-blue-950/60   text-blue-700   dark:text-blue-400'   :
-                        crawlState === 'error'     ? 'bg-rose-100   dark:bg-rose-950/60   text-rose-700   dark:text-rose-400'   :
-                        'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                      }`}>
-                        {crawlState === 'crawling'  && <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Crawling</>}
-                        {crawlState === 'stopping'  && <><Clock className="w-3 h-3" /> Stopping</>}
-                        {crawlState === 'paused'    && 'Paused'}
+                      <span className={`ml-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${crawlState === 'crawling' ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400' :
+                          crawlState === 'stopping' ? 'bg-amber-100  dark:bg-amber-950/60  text-amber-700  dark:text-amber-400' :
+                            crawlState === 'paused' ? 'bg-orange-100 dark:bg-orange-950/60 text-orange-700 dark:text-orange-400' :
+                              crawlState === 'completed' ? 'bg-blue-100   dark:bg-blue-950/60   text-blue-700   dark:text-blue-400' :
+                                crawlState === 'error' ? 'bg-rose-100   dark:bg-rose-950/60   text-rose-700   dark:text-rose-400' :
+                                  'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                        }`}>
+                        {crawlState === 'crawling' && <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Crawling</>}
+                        {crawlState === 'stopping' && <><Clock className="w-3 h-3" /> Stopping</>}
+                        {crawlState === 'paused' && 'Paused'}
                         {crawlState === 'completed' && <><CheckCircle2 className="w-3 h-3" /> Completed</>}
-                        {crawlState === 'error'     && <><AlertTriangle className="w-3 h-3" /> Error</>}
+                        {crawlState === 'error' && <><AlertTriangle className="w-3 h-3" /> Error</>}
                       </span>
                     )}
                   </div>
@@ -409,6 +513,20 @@ export default function NewMigration() {
                     {errors.url && <p className="text-xs text-rose-500 mt-1.5">{errors.url}</p>}
                   </div>
 
+                  {/* Job Name */}
+                  <div>
+                    <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">
+                      Job Name <span className="normal-case font-normal text-slate-300 dark:text-slate-600">(optional — auto-filled from URL)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={jobName}
+                      onChange={(e) => setJobName(e.target.value)}
+                      placeholder={websiteUrl ? websiteUrl.replace(/^https?:\/\//, '').split('/')[0] + ' migration' : 'e.g. Nike store migration'}
+                      className="w-full px-3 py-3 rounded-xl themed-input bg-transparent text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all"
+                    />
+                  </div>
+
                   {/* Session banner */}
                   {urlSession && crawlState === 'idle' && (
                     <div className="flex items-start gap-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/50 rounded-xl px-4 py-3">
@@ -425,10 +543,10 @@ export default function NewMigration() {
                   {(crawlState === 'idle' || crawlState === 'paused') && (
                     <div className="border-t border-black/5 dark:border-white/5 pt-5">
                       <p className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-3">Crawl Settings</p>
-                      <div className="grid grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         {([
-                          { lbl: 'Max Pages',    value: maxPages,    min: 1, max: 10000,  step: 10, set: setMaxPages,    hint: 'pages' },
-                          { lbl: 'Max Depth',    value: maxDepth,    min: 1, max: 20,     step: 1,  set: setMaxDepth,    hint: 'levels' },
+                          { lbl: 'Max Pages', value: maxPages, min: 1, max: 10000, step: 10, set: setMaxPages, hint: 'pages' },
+                          { lbl: 'Max Depth', value: maxDepth, min: 1, max: 20, step: 1, set: setMaxDepth, hint: 'levels' },
                           { lbl: 'Max Products', value: maxProducts, min: 0, max: 100000, step: 10, set: setMaxProducts, hint: '0 = unlimited' },
                         ] as const).map(({ lbl, value, min, max, step: s, set, hint }) => (
                           <div key={lbl}>
@@ -476,7 +594,7 @@ export default function NewMigration() {
                   {(crawlState === 'crawling' || crawlState === 'stopping' || crawlState === 'completed') && (
                     <div className="space-y-4">
                       {/* Metrics row */}
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-3 sm:grid-cols-3 gap-2 sm:gap-3">
                         <div className="bg-black/5 dark:bg-white/5 rounded-xl p-3 text-center">
                           <p className="text-2xl font-light tabular-nums text-slate-800 dark:text-slate-200">{crawlStats.pagesVisited}</p>
                           <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Pages visited</p>
@@ -491,23 +609,31 @@ export default function NewMigration() {
                         </div>
                       </div>
 
-                      {/* Pages progress bar */}
-                      {maxPages > 0 && (
-                        <div>
-                          <div className="flex justify-between text-xs text-slate-400 dark:text-slate-500 mb-1.5">
-                            <span>Pages</span>
-                            <span>{crawlStats.pagesVisited} / {maxPages}</span>
+                      {/* Progress bar — products when limit known, pages otherwise */}
+                      {(maxProducts > 0 || maxPages > 0) && (() => {
+                        // Prefer total_input_products from API, fall back to user-set maxProducts
+                        const productTotal = crawlStats.totalProducts > 0 ? crawlStats.totalProducts : maxProducts
+                        const useProducts  = productTotal > 0
+                        const current      = useProducts ? crawlStats.productsScraped : crawlStats.pagesVisited
+                        const total        = useProducts ? productTotal : maxPages
+                        const pct          = total > 0 ? Math.min((current / total) * 100, 100) : 0
+                        return (
+                          <div>
+                            <div className="flex justify-between text-xs text-slate-400 dark:text-slate-500 mb-1.5">
+                              <span>{useProducts ? 'Products' : 'Pages'}</span>
+                              <span>{current} / {total}</span>
+                            </div>
+                            <div className="h-1.5 bg-black/5 dark:bg-white/5 rounded-full overflow-hidden">
+                              <motion.div
+                                className={`h-full rounded-full ${crawlState === 'completed' ? 'bg-blue-500' : 'bg-emerald-500'}`}
+                                initial={{ width: 0 }}
+                                animate={{ width: `${pct}%` }}
+                                transition={{ duration: 0.5 }}
+                              />
+                            </div>
                           </div>
-                          <div className="h-1.5 bg-black/5 dark:bg-white/5 rounded-full overflow-hidden">
-                            <motion.div
-                              className={`h-full rounded-full ${crawlState === 'completed' ? 'bg-blue-500' : 'bg-emerald-500'}`}
-                              initial={{ width: 0 }}
-                              animate={{ width: `${Math.min((crawlStats.pagesVisited / maxPages) * 100, 100)}%` }}
-                              transition={{ duration: 0.5 }}
-                            />
-                          </div>
-                        </div>
-                      )}
+                        )
+                      })()}
 
                       {/* Currently processing URL */}
                       {crawlStats.currentUrl && (
@@ -537,14 +663,63 @@ export default function NewMigration() {
                     </p>
                   )}
 
-                  {/* Completion message */}
+                  {/* Completion message + Extend option */}
                   {crawlState === 'completed' && (
-                    <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/50 rounded-xl px-4 py-2.5">
-                      <CheckCircle2 className="w-4 h-4 text-blue-500 flex-shrink-0" />
-                      <p className="text-xs text-blue-700 dark:text-blue-300 font-medium">
-                        Crawl complete — {crawlStats.productsScraped} products scraped in {fmtSeconds(crawlStats.elapsedSeconds)}.
-                        Continue to start the migration.
-                      </p>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/50 rounded-xl px-4 py-2.5">
+                        <CheckCircle2 className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                        <p className="text-xs text-blue-700 dark:text-blue-300 font-medium">
+                          Crawl complete — {crawlStats.productsScraped} products scraped in {fmtSeconds(crawlStats.elapsedSeconds)}.
+                          Continue to start the migration or extend to scrape more.
+                        </p>
+                      </div>
+                      {/* Extend crawl — scrape additional NEW products without re-visiting pages */}
+                      <div className="flex items-center gap-2 bg-black/[0.02] dark:bg-white/[0.02] border border-black/5 dark:border-white/5 rounded-xl px-4 py-3">
+                        <span className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">Extend by</span>
+                        <input
+                          type="number" min={1} max={10000} value={extendCount}
+                          onChange={(e) => setExtendCount(Math.max(1, Number(e.target.value)))}
+                          className="w-20 px-2 py-1 rounded-lg text-xs text-center themed-input bg-transparent focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent,_0_0_0))]/20 tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                        <span className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">more products</span>
+                        <Button
+                          type="button" variant="secondary" size="sm"
+                          icon={<RotateCcw className="w-3.5 h-3.5" />}
+                          loading={extending} onClick={handleExtendCrawl}
+                        >
+                          {extending ? 'Extending…' : 'Extend'}
+                        </Button>
+                      </div>
+
+                      {/* Download scraped data */}
+                      <div className="bg-black/[0.02] dark:bg-white/[0.02] border border-black/5 dark:border-white/5 rounded-xl px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2.5">
+                          Download scraped data
+                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {(['csv', 'json', 'jsonl'] as const).map((fmt) => {
+                            const url = crawlApi.getDownloadUrl({
+                              ...(crawlJobId ? { job_id: crawlJobId } : { name: jobName || websiteUrl.replace(/^https?:\/\//, '').split('/')[0] }),
+                              type: fmt,
+                            })
+                            return (
+                              <a
+                                key={fmt}
+                                href={url}
+                                download
+                                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium border transition-colors
+                                  bg-white dark:bg-slate-800 border-black/10 dark:border-white/10
+                                  text-slate-700 dark:text-slate-300
+                                  hover:bg-slate-50 dark:hover:bg-slate-700
+                                  hover:border-black/20 dark:hover:border-white/20"
+                              >
+                                <Download className="w-3 h-3" />
+                                {fmt.toUpperCase()}
+                              </a>
+                            )
+                          })}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -582,7 +757,7 @@ export default function NewMigration() {
                       <Button type="button" variant="primary" size="lg" icon={<Play className="w-4 h-4" />} onClick={handleResumeCrawl}>
                         Resume Crawling
                       </Button>
-                      <Button type="button" variant="secondary" size="lg" icon={<RotateCcw className="w-4 h-4" />} onClick={() => { setCrawlState('idle'); setUrlSession(null); setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '' }) }}>
+                      <Button type="button" variant="secondary" size="lg" icon={<RotateCcw className="w-4 h-4" />} onClick={() => { setCrawlState('idle'); setUrlSession(null); setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 }) }}>
                         Start New
                       </Button>
                     </>
@@ -650,7 +825,7 @@ export default function NewMigration() {
                   <label className="block text-xs font-medium uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-3">
                     Migration Type
                   </label>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {migrationTypes.map(({ value, label: lbl, icon: Icon, desc }) => {
                       const active = migrationType === value
                       return (
@@ -673,7 +848,21 @@ export default function NewMigration() {
                   <label className="block text-xs font-medium uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-3">
                     Input Format
                   </label>
-                  <div className="bg-black/5 dark:bg-white/5 p-1 rounded-full flex gap-0.5 w-fit flex-wrap">
+                  {/* Mobile: 2-col grid · sm+: inline pill row */}
+                  <div className="grid grid-cols-2 gap-1.5 sm:hidden">
+                    {inputFormats.map(({ value, label: lbl }) => {
+                      const active = inputFormat === value
+                      return (
+                        <button key={value} type="button" onClick={() => setInputFormat(value)}
+                          className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 ${active ? 'bg-[rgb(var(--accent,_0_0_0))] text-[rgb(var(--accent-fg,_255_255_255))] shadow-sm' : 'bg-black/5 dark:bg-white/5 text-slate-500 dark:text-slate-400'}`}
+                        >
+                          {value === 'ai_parser' && <Sparkles className="w-3 h-3" />}
+                          {lbl}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="hidden sm:flex bg-black/5 dark:bg-white/5 p-1 rounded-full gap-0.5 w-fit">
                     {inputFormats.map(({ value, label: lbl }) => {
                       const active = inputFormat === value
                       return (
@@ -753,11 +942,10 @@ export default function NewMigration() {
                           onDragLeave={() => setDragOver(false)}
                           onDrop={handleDrop}
                           onClick={() => fileInputRef.current?.click()}
-                          className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-150 ${
-                            dragOver ? 'border-black/30 dark:border-white/30 bg-black/5 dark:bg-white/5'
-                            : file    ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
-                            :           'border-slate-200 dark:border-slate-700 bg-white/40 dark:bg-slate-900 hover:border-black/20 dark:hover:border-white/20 hover:bg-white/60 dark:hover:bg-slate-800/60'
-                          }`}
+                          className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-150 ${dragOver ? 'border-black/30 dark:border-white/30 bg-black/5 dark:bg-white/5'
+                              : file ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
+                                : 'border-slate-200 dark:border-slate-700 bg-white/40 dark:bg-slate-900 hover:border-black/20 dark:hover:border-white/20 hover:bg-white/60 dark:hover:bg-slate-800/60'
+                            }`}
                         >
                           <input ref={fileInputRef} type="file" accept=".json,.csv,.xml,.txt" className="hidden" onChange={handleFileChange} />
                           <AnimatePresence mode="wait">
@@ -804,6 +992,7 @@ export default function NewMigration() {
           </AnimatePresence>
         </form>
       </div>
+      <WalkingPets active={step === 1 && (crawlState === 'crawling' || crawlState === 'stopping')} />
     </div>
   )
 }

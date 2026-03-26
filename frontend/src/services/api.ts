@@ -1,4 +1,4 @@
-import type { MigrationJob, MigrationStatus, InputFormat, FailedRow, StoredCrawlSession } from '../types'
+import type { MigrationJob, MigrationStatus, InputFormat, FailedRow, StoredCrawlSession, MergedJob } from '../types'
 
 // ---------------------------------------------------------------------------
 // Base URL — set VITE_API_BASE_URL in .env
@@ -159,11 +159,14 @@ function mapJob(raw: Record<string, unknown>): MigrationJob {
   const totalRows   = Math.max(storedTotal > 0 ? storedTotal : rawRecords.length, 0)
   const safeTotal   = Math.max(totalRows, 1) // avoid division by zero
 
-  // Clamp all counters so nothing exceeds totalRows
-  const correctRows   = Math.min(Math.max((raw.correct_rows   as number) ?? 0, 0), totalRows)
-  const failedRows    = Math.min(Math.max((raw.failed_rows    as number) ?? 0, 0), totalRows - correctRows)
+  // Clamp all counters so nothing exceeds totalRows (skip clamping when totalRows is still 0)
+  const rawCorrect    = Math.max((raw.correct_rows   as number) ?? 0, 0)
+  const rawFailed     = Math.max((raw.failed_rows    as number) ?? 0, 0)
   const retryRows     = Math.max((raw.retry_rows     as number) ?? 0, 0)
-  const processedRows = Math.min(Math.max((raw.processed_rows as number) ?? 0, 0), totalRows)
+  const rawProcessed  = Math.max((raw.processed_rows as number) ?? 0, 0)
+  const correctRows   = totalRows > 0 ? Math.min(rawCorrect, totalRows) : rawCorrect
+  const failedRows    = totalRows > 0 ? Math.min(rawFailed,  totalRows - correctRows) : rawFailed
+  const processedRows = totalRows > 0 ? Math.min(rawProcessed, totalRows) : rawProcessed
 
   // progress_pct comes from /status endpoint; derive from counts when absent — clamp to 100
   const rawProgress = raw.progress_pct != null
@@ -379,7 +382,14 @@ export const migrationApi = {
   },
 
   async listJobs(_userId: string): Promise<MigrationJob[]> {
-    const raw = await request<Record<string, unknown>[]>('/api/v1/migration/?limit=200')
+    const res = await request<unknown>('/api/v1/migration/?limit=200')
+    const raw: Record<string, unknown>[] = Array.isArray(res)
+      ? (res as Record<string, unknown>[])
+      : Array.isArray((res as Record<string, unknown>)?.items)
+        ? ((res as Record<string, unknown>).items as Record<string, unknown>[])
+        : Array.isArray((res as Record<string, unknown>)?.jobs)
+          ? ((res as Record<string, unknown>).jobs as Record<string, unknown>[])
+          : []
     return raw.map(mapJob)
   },
 
@@ -409,6 +419,20 @@ export const migrationApi = {
     return request(`/api/v1/migration/${jobId}`, { method: 'DELETE' })
   },
 
+  async batchRows(
+    jobIds: string[],
+    filter: 'all' | 'correct' | 'failed',
+    skip = 0,
+    limit = 500,
+  ): Promise<FailedRow[]> {
+    const suffix = filter === 'correct' ? '/correct' : filter === 'failed' ? '/failed' : ''
+    const rows = await request<Record<string, unknown>[]>(
+      `/api/v1/migration/batch${suffix}`,
+      { method: 'POST', body: JSON.stringify({ job_ids: jobIds, skip, limit }) },
+    )
+    return rows.map((row, idx) => mapRow(row, skip + idx + 1))
+  },
+
   async aiRetry(rowId: string): Promise<void> {
     return request(`/api/v1/migration/row/${rowId}/ai-retry`, { method: 'POST' })
   },
@@ -422,9 +446,13 @@ export const migrationApi = {
 }
 
 // ---------------------------------------------------------------------------
-// Crawl API — mirrors sample_scraper.py backend contract
-// Endpoints: POST /crawl/start  POST /crawl/stop  POST /crawl/resume
-//            GET  /crawl/status  GET /crawl/session?url=...
+// Crawl API — aligned with scraper.md contract
+// Public:  POST /crawl              POST /crawl/extend
+//          POST /crawl/control/stop  POST /crawl/control/continue
+//          GET  /crawl/status        GET  /crawl/sessions
+//          GET  /download            GET  /results
+// UI-only: POST /crawl/start (non-blocking, used instead of blocking /crawl)
+//          GET  /crawl/session?url=  (single-URL session check)
 // Uses VITE_CRAWL_API_URL as base (falls back to VITE_API_BASE_URL)
 // ---------------------------------------------------------------------------
 async function crawlRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -445,54 +473,247 @@ async function crawlRequest<T>(path: string, options: RequestInit = {}): Promise
   if (res.status === 204) return undefined as unknown as T
   return res.json() as Promise<T>
 }
+
+// ── Response shapes ──────────────────────────────────────────────────────────
+
 export interface CrawlStatusResponse {
-  status: 'idle' | 'crawling' | 'stopping' | 'paused' | 'completed' | 'error'
-  pages_visited: number
-  products_scraped?: number
-  products_count?: number
-  elapsed_seconds: number
-  current_url?: string
-  url?: string
-  job_id?: string | null
-  error?: string
+  /** idle | crawling | stopping | paused | completed | error */
+  status:                'idle' | 'crawling' | 'stopping' | 'paused' | 'completed' | 'error'
+  pages_visited:         number
+  products_scraped?:     number
+  products_count?:       number
+  total_input_products?: number
+  elapsed_seconds:       number
+  current_url?:          string
+  url?:                  string
+  job_id?:               string | null
+  error?:                string
 }
 
+/** Single-URL session check (`GET /crawl/session?url=`) */
 export interface CrawlSessionResponse {
-  has_session: boolean
+  has_session:    boolean
   products_count: number
-  saved_at: string
+  saved_at:       string
 }
+
+/** One entry from `GET /crawl/sessions` */
+export interface CrawlSessionEntry {
+  url:            string
+  status:         string
+  products_count: number
+  saved_at:       string
+}
+
+/** `GET /crawl/sessions` */
+export interface CrawlSessionsResponse {
+  total:    number
+  sessions: CrawlSessionEntry[]
+}
+
+/** `POST /crawl/control/stop` */
+export interface CrawlStopResponse {
+  /** stopped | already_stopping | no_active_crawl */
+  status:   string
+  message?: string
+  job_id?:  string
+  url?:     string
+}
+
+/** `POST /crawl/control/continue` */
+export interface CrawlContinueResponse {
+  /** resuming | already_running | still_stopping | not_stopped | no_session_data */
+  status:   string
+  message?: string
+  job_id?:  string
+  url?:     string
+}
+
+/** `POST /crawl/extend` */
+export interface CrawlExtendResponse {
+  status:   string
+  message?: string
+  job_id?:  string
+  stats?:   { pages_visited: number; products_scraped: number; elapsed_seconds: number }
+  products?: unknown[]
+}
+
+/** `GET /results` */
+export interface CrawlResultsResponse {
+  /** completed | running | no_results */
+  status:         string
+  job_id?:        string
+  url?:           string
+  elapsed_seconds?: number
+  total_products?: number
+  stats?:         Record<string, unknown>
+  products?:      unknown[]
+}
+
+// ── API object ───────────────────────────────────────────────────────────────
 
 export const crawlApi = {
+  /**
+   * POST /crawl/start — start a crawl as a background thread (non-blocking).
+   * Body: { name (required), url (required), max_products (required >0),
+   *         max_pages? (optional), max_depth? (optional) }
+   */
   async start(
     url: string,
-    params: { max_pages?: number; max_depth?: number; max_products?: number }
+    params: { name: string; max_products: number; max_pages?: number; max_depth?: number }
   ): Promise<{ status: string; job_id?: string; message?: string }> {
-    const qs = new URLSearchParams({
+    const body: Record<string, unknown> = {
+      name:         params.name,
       url,
-      max_pages:    String(params.max_pages    ?? 100),
-      max_depth:    String(params.max_depth    ?? 5),
-      max_products: String(params.max_products ?? 0),
+      max_products: params.max_products,
+    }
+    if (params.max_pages != null) body.max_pages = params.max_pages
+    if (params.max_depth != null) body.max_depth = params.max_depth
+    return crawlRequest('/crawl/start', {
+      method: 'POST',
+      body:   JSON.stringify(body),
     })
-    return crawlRequest(`/crawl/start?${qs}`, { method: 'POST' })
   },
 
-  async stop(): Promise<{ status: string }> {
-    return crawlRequest('/crawl/stop', { method: 'POST' })
+  /**
+   * POST /crawl/control/stop — stop the active crawl and save state for resume.
+   * Status: stopped | already_stopping | no_active_crawl
+   */
+  async stop(): Promise<CrawlStopResponse> {
+    return crawlRequest('/crawl/control/stop', { method: 'POST' })
   },
 
-  async resume(url: string): Promise<{ status: string; job_id?: string }> {
-    const qs = new URLSearchParams({ url })
-    return crawlRequest(`/crawl/resume?${qs}`, { method: 'POST' })
+  /**
+   * POST /crawl/control/continue — resume a paused crawl (no params needed).
+   * Status: resuming | already_running | still_stopping | not_stopped | no_session_data
+   */
+  async resume(): Promise<CrawlContinueResponse> {
+    return crawlRequest('/crawl/control/continue', { method: 'POST' })
   },
 
+  /**
+   * POST /crawl/extend — continue a completed job and scrape additional NEW products.
+   * Skips all previously visited URLs and already-scraped products.
+   */
+  async extend(jobId: string, maxProducts: number): Promise<CrawlExtendResponse> {
+    return crawlRequest('/crawl/extend', {
+      method: 'POST',
+      body:   JSON.stringify({ job_id: jobId, max_products: maxProducts }),
+    })
+  },
+
+  /** GET /crawl/status — live status of the current crawl. */
   async getStatus(): Promise<CrawlStatusResponse> {
     return crawlRequest('/crawl/status')
   },
 
+  /** GET /crawl/sessions — list all crawl sessions (paused, completed, all). */
+  async getSessions(): Promise<CrawlSessionsResponse> {
+    return crawlRequest('/crawl/sessions')
+  },
+
+  /** GET /crawl/session?url= — check if a specific URL has a resumable session. */
   async getSession(url: string): Promise<CrawlSessionResponse> {
     const qs = new URLSearchParams({ url })
     return crawlRequest(`/crawl/session?${qs}`)
+  },
+
+  /**
+   * GET /results — products from the most recently completed crawl job.
+   * Status: completed | running | no_results
+   */
+  async getResults(): Promise<CrawlResultsResponse> {
+    return crawlRequest('/results')
+  },
+
+  /**
+   * GET /download — download scraped products as a file attachment.
+   * type: csv | json | jsonl (default: csv)
+   */
+  getDownloadUrl(params: { job_id?: string; name?: string; type?: 'csv' | 'json' | 'jsonl' }): string {
+    const qs = new URLSearchParams()
+    if (params.job_id) qs.set('job_id', params.job_id)
+    if (params.name)   qs.set('name',   params.name)
+    if (params.type)   qs.set('type',   params.type)
+    return `${CRAWL_BASE}/download?${qs}`
+  },
+
+  /** GET /health — liveness check. */
+  async health(): Promise<{ status: string }> {
+    return crawlRequest('/health')
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Merged jobs API
+// ---------------------------------------------------------------------------
+function mapMergedJob(raw: Record<string, unknown>): MergedJob {
+  return {
+    id:           String((raw._id ?? raw.id) ?? ''),
+    name:         String(raw.job_name ?? raw.name ?? 'Untitled Merge'),
+    sourceJobIds: Array.isArray(raw.source_job_ids) ? (raw.source_job_ids as string[]) : [],
+    totalRows:    (raw.total_rows   as number) ?? 0,
+    correctRows:  (raw.correct_rows as number) ?? 0,
+    failedRows:   (raw.failed_rows  as number) ?? 0,
+    createdAt:    String(raw.created_at ?? new Date().toISOString()),
+    updatedAt:    String(raw.updated_at ?? raw.created_at ?? new Date().toISOString()),
+  }
+}
+
+export const mergedApi = {
+  /** POST /migration/merged/save — persist a new merged job */
+  async save(jobIds: string[], name?: string): Promise<MergedJob> {
+    const raw = await request<Record<string, unknown>>('/api/v1/migration/merged/save', {
+      method: 'POST',
+      body: JSON.stringify({ job_ids: jobIds, ...(name ? { name } : {}) }),
+    })
+    return mapMergedJob(raw)
+  },
+
+  /** GET /migration/merged/ — list all saved merged jobs */
+  async list(): Promise<MergedJob[]> {
+    const raw = await request<Record<string, unknown>[]>('/api/v1/migration/merged/')
+    return raw.map(mapMergedJob)
+  },
+
+  /** GET /migration/merged/{id} — summary of one merged job */
+  async get(id: string): Promise<MergedJob> {
+    const raw = await request<Record<string, unknown>>(`/api/v1/migration/merged/${id}`)
+    return mapMergedJob(raw)
+  },
+
+  /** GET /migration/merged/{id}/rows — paginated merged rows */
+  async getRows(id: string, params?: { skip?: number; limit?: number }): Promise<FailedRow[]> {
+    const qs = new URLSearchParams()
+    if (params?.skip  != null) qs.set('skip',  String(params.skip))
+    if (params?.limit != null) qs.set('limit', String(params.limit))
+    const rows = await request<Record<string, unknown>[]>(
+      `/api/v1/migration/merged/${id}/rows?${qs}`,
+    )
+    return rows.map((row, idx) => mapRow(row, (params?.skip ?? 0) + idx + 1))
+  },
+
+  /** PATCH /migration/merged/{id}/row/{row_id} — edit a merged row */
+  async updateRow(mergedId: string, rowId: string, data: Record<string, unknown>): Promise<void> {
+    return request(`/api/v1/migration/merged/${mergedId}/row/${rowId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ corrected_value: data }),
+    })
+  },
+
+  /** DELETE /migration/merged/{id}/row/{row_id} — remove one row */
+  async deleteRow(mergedId: string, rowId: string): Promise<void> {
+    return request(`/api/v1/migration/merged/${mergedId}/row/${rowId}`, { method: 'DELETE' })
+  },
+
+  /** DELETE /migration/merged/{id} — delete merged job + all its rows */
+  async deleteJob(id: string): Promise<void> {
+    return request(`/api/v1/migration/merged/${id}`, { method: 'DELETE' })
+  },
+
+  /** POST /migration/merged/{id}/sync/{source_job_id} — re-sync one source job */
+  async syncSourceJob(mergedId: string, sourceJobId: string): Promise<void> {
+    return request(`/api/v1/migration/merged/${mergedId}/sync/${sourceJobId}`, { method: 'POST' })
   },
 }
 

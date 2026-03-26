@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { io, type Socket } from 'socket.io-client'
 import { usePageAnimation } from '../hooks/usePageAnimation'
 import { PageLoader } from '../components/ui/Spinner'
 import {
@@ -14,13 +15,44 @@ import {
   Table,
   Square,
   RotateCcw,
+  Wifi,
+  WifiOff,
 } from 'lucide-react'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import StatCard from '../components/migration/StatCard'
 import type { MigrationJob } from '../types'
-import { migrationApi } from '../services/api'
+import { migrationApi, getAccessToken } from '../services/api'
 import WalkingPets from '../components/ui/WalkingPets'
+
+const SOCKET_URL = (import.meta.env.VITE_API_BASE_URL as string) ?? ''
+
+/** Merge a raw socket payload into the current job state.
+ *  Handles both flat  { processed_rows: 5 }
+ *  and nested         { data: { processed_rows: 5 } }  payloads. */
+function applyUpdate(prev: MigrationJob, raw: Record<string, unknown>): MigrationJob {
+  // Unwrap nested `data` envelope if present
+  const d: Record<string, unknown> =
+    raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+      ? { ...raw, ...(raw.data as Record<string, unknown>) }
+      : raw
+
+  const status = (d.status as string | undefined) ?? prev.status
+  const mappedStatus =
+    status === 'stopped' ? 'failed' : (status as MigrationJob['status']) ?? prev.status
+
+  return {
+    ...prev,
+    status:         mappedStatus,
+    progress:       (d.progress          as number) ?? prev.progress,
+    totalRows:      (d.total_rows         as number) || (d.totalRows         as number) || prev.totalRows,
+    processedRows:  (d.processed_rows     as number) ?? (d.processedRows     as number) ?? prev.processedRows,
+    correctRows:    (d.correct_rows       as number) ?? (d.correctRows       as number) ?? prev.correctRows,
+    failedRows:     (d.failed_rows        as number) ?? (d.failedRows        as number) ?? prev.failedRows,
+    processingRows: (d.processing_rows    as number) ?? (d.processingRows    as number) ?? prev.processingRows,
+    completedAt:    (d.completed_at       as string) ?? (d.completedAt       as string) ?? prev.completedAt,
+  }
+}
 
 export default function JobProgress() {
   const { jobId } = useParams<{ jobId: string }>()
@@ -31,47 +63,149 @@ export default function JobProgress() {
   const [stopping, setStopping] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [restarting, setRestarting] = useState(false)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'idle'>('idle')
 
-  // Initial load
+  const socketRef       = useRef<Socket | null>(null)
+  const pollRef         = useRef<ReturnType<typeof setInterval> | null>(null)
+  const socketStatusRef = useRef(socketStatus)
+  socketStatusRef.current = socketStatus
+
+  const stopPoll = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+  }, [])
+
+  /** Lightweight poll — only used when socket is disconnected/reconnecting */
+  const startFallbackPoll = useCallback((id: string) => {
+    if (pollRef.current) return
+    pollRef.current = setInterval(() => {
+      // Stop polling the moment socket reconnects
+      if (socketStatusRef.current === 'connected') { stopPoll(); return }
+      migrationApi.getStatus(id)
+        .then((s) => setJob((prev) => prev ? applyUpdate(prev, {
+          status:          s.status,
+          total_rows:      s.totalRows,
+          processed_rows:  s.processedRows,
+          correct_rows:    s.correctRows,
+          failed_rows:     s.failedRows,
+          processing_rows: s.processingRows,
+          completed_at:    s.completedAt,
+        }) : prev))
+        .catch(() => { /* ignore transient errors */ })
+    }, 4000)
+  }, [stopPoll])
+
+  // ── Socket.IO — primary live updates ────────────────────────────────────────
   useEffect(() => {
     if (!jobId) return
-    migrationApi.getJob(jobId).then(setJob).catch(console.error)
-  }, [jobId])
 
-  // Poll status every 3 seconds while processing
-  useEffect(() => {
-    if (!jobId || job?.status !== 'processing') return
+    let pendingPoll: ReturnType<typeof setInterval> | null = null
 
-    intervalRef.current = setInterval(() => {
-      migrationApi.getStatus(jobId)
-        .then((s) => setJob((prev) => prev ? {
-          // Keep stable fields (name, type, id, createdAt) from the full job load;
-          // only update live counters returned by the lightweight /status endpoint
-          ...prev,
-          status:        s.status,
-          progress:      s.progress,
-          totalRows:     s.totalRows  || prev.totalRows,
-          processedRows: s.processedRows,
-          correctRows:   s.correctRows,
-          failedRows:    s.failedRows,
-          processingRows:s.processingRows,
-          completedAt:   s.completedAt ?? prev.completedAt,
-        } : s))
-        .catch(console.error)
-    }, 3000)
+    const connectSocket = () => {
+      if (socketRef.current) return // already connected
+      setSocketStatus('connecting')
+
+      const token = getAccessToken()
+      const socket = io(SOCKET_URL, {
+        auth:                 token ? { token } : {},
+        transports:           ['polling'],
+        extraHeaders:         { 'ngrok-skip-browser-warning': '1' },
+        reconnection:         true,
+        reconnectionDelay:    1000,
+        reconnectionAttempts: Infinity,
+        timeout:              8000,
+      })
+      socketRef.current = socket
+
+      const joinRoom = () => {
+        socket.emit('join_job',  jobId)
+        socket.emit('join_job',  { job_id: jobId })
+        socket.emit('subscribe', jobId)
+        socket.emit('subscribe', { job_id: jobId })
+      }
+
+      socket.on('connect', () => {
+        setSocketStatus('connected')
+        stopPoll()
+        joinRoom()
+      })
+
+      const handleUpdate = (raw: Record<string, unknown>) => {
+        const incoming = (raw.job_id ?? raw.jobId ?? raw.id) as string | undefined
+        if (incoming && incoming !== jobId) return
+        setJob((prev) => prev ? applyUpdate(prev, raw) : prev)
+      }
+
+      socket.on('job_update',      handleUpdate)
+      socket.on('job_progress',    handleUpdate)
+      socket.on('progress_update', handleUpdate)
+      socket.on('status_update',   handleUpdate)
+      socket.on('progress',        handleUpdate)
+      socket.on('job_complete',    handleUpdate)
+      socket.on('job_completed',   handleUpdate)
+      socket.on('job_failed',      handleUpdate)
+      socket.on('job_error',       handleUpdate)
+
+      socket.on('connect_error', () => {
+        setSocketStatus('disconnected')
+        startFallbackPoll(jobId)
+      })
+      socket.on('disconnect', () => {
+        setSocketStatus('disconnected')
+        startFallbackPoll(jobId)
+      })
+      // Socket.IO v4 — reconnect is a Manager event
+      socket.io.on('reconnect', () => {
+        setSocketStatus('connected')
+        stopPoll()
+        joinRoom()
+      })
+    }
+
+    migrationApi.getJob(jobId).then((j) => {
+      setJob(j)
+
+      if (j.status === 'processing') {
+        connectSocket()
+        return
+      }
+
+      // Job is pending — poll until it transitions to processing, then connect
+      if (j.status === 'pending') {
+        pendingPoll = setInterval(() => {
+          migrationApi.getJob(jobId).then((updated) => {
+            setJob(updated)
+            if (updated.status === 'processing') {
+              clearInterval(pendingPoll!)
+              pendingPoll = null
+              connectSocket()
+            } else if (updated.status !== 'pending') {
+              // terminal or unexpected state — stop polling
+              clearInterval(pendingPoll!)
+              pendingPoll = null
+            }
+          }).catch(() => {})
+        }, 3000)
+      }
+    }).catch(console.error)
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
+      socketRef.current?.disconnect()
+      socketRef.current = null
+      stopPoll()
     }
-  }, [jobId, job?.status])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId])
 
-  // Stop polling when done
+  // Disconnect once job reaches a terminal state
   useEffect(() => {
     if (job?.status === 'completed' || job?.status === 'failed') {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      socketRef.current?.disconnect()
+      socketRef.current = null
+      stopPoll()
+      setSocketStatus('idle')
     }
-  }, [job?.status])
+  }, [job?.status, stopPoll])
 
   async function handleRestart() {
     if (!jobId || restarting) return
@@ -143,7 +277,7 @@ export default function JobProgress() {
   const isPhase1 = isLive && !isPhase2
 
   return (
-    <div ref={pageRef} className="min-h-screen px-8 py-10">
+    <div ref={pageRef} className="min-h-screen px-4 sm:px-8 py-6 sm:py-10">
       <div className="max-w-4xl mx-auto">
         {/* Back button */}
         <button
@@ -155,7 +289,7 @@ export default function JobProgress() {
         </button>
 
         {/* Header */}
-        <div className="flex items-start justify-between mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-8">
           <div>
             <div className="flex items-center gap-2.5 mb-1">
               <p className="text-xs font-medium uppercase tracking-widest text-slate-400 dark:text-slate-500">
@@ -164,7 +298,7 @@ export default function JobProgress() {
               <Badge variant="status" status={job.status} size="xs" />
               <Badge variant="type" type={job.type} size="xs" />
             </div>
-            <h1 className="text-3xl font-light tracking-tight text-black dark:text-white">
+            <h1 className="text-2xl sm:text-3xl font-light tracking-tight text-black dark:text-white">
               {job.name}
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 font-light mt-1">
@@ -183,13 +317,33 @@ export default function JobProgress() {
           {isLive && (
             <div className="flex items-center gap-3">
               <motion.div
-                className="flex items-center gap-2 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 rounded-full px-3 py-1.5"
-                animate={{ opacity: [1, 0.6, 1] }}
+                className={`flex items-center gap-2 rounded-full px-3 py-1.5 border transition-colors ${
+                  socketStatus === 'connected'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50'
+                    : socketStatus === 'connecting'
+                    ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50'
+                    : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/50'
+                }`}
+                animate={{ opacity: [1, 0.7, 1] }}
                 transition={{ duration: 2, repeat: Infinity }}
               >
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
-                  Live · refreshes every 3s
+                {socketStatus === 'connected' ? (
+                  <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+                ) : socketStatus === 'connecting' ? (
+                  <span className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <WifiOff className="w-3.5 h-3.5 text-rose-500" />
+                )}
+                <span className={`text-xs font-medium ${
+                  socketStatus === 'connected'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : socketStatus === 'connecting'
+                    ? 'text-blue-600 dark:text-blue-400'
+                    : 'text-rose-600 dark:text-rose-400'
+                }`}>
+                  {socketStatus === 'connected'     ? 'Live · socket' :
+                   socketStatus === 'connecting'    ? 'Connecting…'   :
+                   'Reconnecting…'}
                 </span>
               </motion.div>
               <Button
@@ -206,7 +360,7 @@ export default function JobProgress() {
         </div>
 
         {/* Progress bar section */}
-        <div className="relative themed-card rounded-2xl p-6 mb-6">
+        <div className="relative themed-card rounded-2xl p-4 sm:p-6 mb-6">
           {/* Cat gif sitting at top-center of the card */}
           <img
             src="/src/assests/gatos-memes-gato-meme.gif"
@@ -232,7 +386,7 @@ export default function JobProgress() {
                 </span>
               )}
             </div>
-            <span className="text-2xl font-light text-slate-800 dark:text-slate-200 tabular-nums">
+            <span className="text-xl sm:text-2xl font-light text-slate-800 dark:text-slate-200 tabular-nums">
               {combinedPct}%
             </span>
           </div>
@@ -282,7 +436,7 @@ export default function JobProgress() {
         </div>
 
         {/* Stat cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-8">
           <StatCard
             label="Total"
             value={total}

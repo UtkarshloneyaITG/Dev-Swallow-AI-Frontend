@@ -49,12 +49,12 @@ export default function Login() {
         transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
       >
         {/* Card */}
-        <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-md border border-white/80 dark:border-white/10 rounded-3xl shadow-2xl shadow-black/5 dark:shadow-black/30 p-8">
+        <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-md border border-white/80 dark:border-white/10 rounded-3xl shadow-2xl shadow-black/5 dark:shadow-black/30 p-6 sm:p-8">
           {/* Logo */}
           <div className="flex items-center gap-2.5 mb-8">
             <Logo size={42} />
             <span className="text-xl font-light tracking-tight text-black dark:text-white">
-              swallow
+              Swallow
             </span>
           </div>
 

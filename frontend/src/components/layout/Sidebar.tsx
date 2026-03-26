@@ -1,12 +1,14 @@
 import type { ComponentType } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard,
   Plus,
   Layers,
+  Combine,
   Settings,
   LogOut,
+  X,
 } from 'lucide-react'
 import Logo from '../ui/Logo'
 import { useAuth } from '../../context/AuthContext'
@@ -18,13 +20,19 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
+  { label: 'Dashboard',     to: '/dashboard',    icon: LayoutDashboard },
   { label: 'New Migration', to: '/new-migration', icon: Plus },
-  { label: 'My Jobs', to: '/jobs', icon: Layers },
-  { label: 'Settings', to: '/settings', icon: Settings },
+  { label: 'My Jobs',       to: '/jobs',          icon: Layers },
+  { label: 'Batch Export',  to: '/batch-export',  icon: Combine },
+  { label: 'Settings',      to: '/settings',      icon: Settings },
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  isOpen?: boolean
+  onClose?: () => void
+}
+
+export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
   const navigate = useNavigate()
   const { user, logout } = useAuth()
 
@@ -33,19 +41,13 @@ export default function Sidebar() {
     navigate('/login')
   }
 
-  return (
-    <motion.aside
-      className="w-60 flex-shrink-0 h-screen sticky top-0 flex flex-col backdrop-blur-xl border-r border-orange-100/60 dark:border-white/5 overflow-hidden bg-white/50 dark:bg-slate-900/70"
-      data-sidebar
-      initial={{ x: -20, opacity: 0 }}
-      animate={{ x: 0, opacity: 1 }}
-      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-    >
+  const sidebarContent = (
+    <div className="w-60 flex-shrink-0 h-screen flex flex-col backdrop-blur-xl border-r border-orange-100/60 dark:border-white/5 overflow-hidden bg-white/50 dark:bg-slate-900/70">
       {/* Logo */}
       <div className="relative px-5 pt-6 pb-5 border-b border-black/5 dark:border-white/5">
         <div className="flex items-center gap-2.5">
           <Logo size={42} />
-          <div>
+          <div className="flex-1 min-w-0">
             <span className="text-lg font-light tracking-tight text-black dark:text-white">
               Swallow
             </span>
@@ -53,6 +55,13 @@ export default function Sidebar() {
               The Migration Platform
             </div>
           </div>
+          {/* Close button — mobile only */}
+          <button
+            onClick={onClose}
+            className="md:hidden p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors flex-shrink-0"
+          >
+            <X className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+          </button>
         </div>
       </div>
 
@@ -67,6 +76,7 @@ export default function Sidebar() {
           <NavLink
             key={to}
             to={to}
+            onClick={onClose}
             className={({ isActive }) =>
               [
                 'flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-150 group',
@@ -97,7 +107,6 @@ export default function Sidebar() {
 
       {/* User + Logout */}
       <div className="px-3 pb-5 border-t border-black/5 dark:border-white/5 pt-4 space-y-1">
-        {/* User info */}
         <div className="flex items-center gap-2.5 px-3 py-2">
           <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-[#F97316] dark:from-slate-700 dark:to-slate-900 flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-semibold text-white">
@@ -114,7 +123,6 @@ export default function Sidebar() {
           </div>
         </div>
 
-        {/* Logout */}
         <button
           onClick={handleLogout}
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 group"
@@ -123,6 +131,35 @@ export default function Sidebar() {
           Sign out
         </button>
       </div>
-    </motion.aside>
+    </div>
+  )
+
+  return (
+    <>
+      {/* Desktop — always visible */}
+      <motion.div
+        className="hidden md:block sticky top-0 h-screen flex-shrink-0"
+        initial={{ x: -20, opacity: 0 }}
+        animate={{ x: 0, opacity: 1 }}
+        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+      >
+        {sidebarContent}
+      </motion.div>
+
+      {/* Mobile — slide-in overlay */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            className="fixed inset-y-0 left-0 z-50 md:hidden"
+            initial={{ x: -240, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -240, opacity: 0 }}
+            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {sidebarContent}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   )
 }

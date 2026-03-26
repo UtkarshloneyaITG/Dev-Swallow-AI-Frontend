@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { usePageAnimation } from '../hooks/usePageAnimation'
 import { Plus, TrendingUp, CheckCircle2, Clock, AlertCircle, Globe } from 'lucide-react'
@@ -56,7 +56,7 @@ export default function Dashboard() {
   const totalRows = jobs.reduce((a, j) => a + j.totalRows, 0)
 
   const successRate =
-    totalRows > 0 ? Math.round(((totalCorrect) / (totalCorrect + totalFailed || 1)) * 100) : 0
+    totalRows > 0 ? Math.round((totalCorrect / totalRows) * 100) : 0
 
   const pageRef = usePageAnimation()
 
@@ -66,18 +66,18 @@ export default function Dashboard() {
     <div ref={pageRef} className="min-h-screen relative z-10">
       {/* Page header */}
       <motion.div
-        className="px-8 pt-8 pb-6 themed-header"
+        className="px-4 sm:px-8 pt-6 sm:pt-8 pb-6 themed-header"
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
       >
         <div className="max-w-6xl mx-auto">
-        <div className="flex items-start justify-between mb-7">
+        <div className="flex flex-wrap items-start justify-between gap-4 mb-7">
           <div>
             <p className="text-xs font-medium uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1">
               Overview
             </p>
-            <h1 className="text-3xl font-light tracking-tight text-black dark:text-white">
+            <h1 className="text-2xl sm:text-3xl font-light tracking-tight text-black dark:text-white">
               Hello, {user?.name.split(' ')[0] ?? 'there'}
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 font-light mt-1">
@@ -95,7 +95,7 @@ export default function Dashboard() {
         </div>
 
         {/* Summary stats */}
-        <div className="grid grid-cols-4 gap-5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-5">
           {[
             {
               label: 'Total Jobs',
@@ -124,7 +124,7 @@ export default function Dashboard() {
           ].map((stat, i) => (
             <motion.div
               key={stat.label}
-              className="themed-card rounded-2xl p-5"
+              className="themed-card rounded-2xl p-4 sm:p-5"
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.1 + i * 0.06, ease: [0.16, 1, 0.3, 1] }}
@@ -132,7 +132,7 @@ export default function Dashboard() {
               <div className={`inline-flex p-1.5 rounded-lg ${stat.color} mb-2`}>
                 {stat.icon}
               </div>
-              <div className="text-2xl font-light text-slate-800 dark:text-slate-200 tabular-nums">
+              <div className="text-xl sm:text-2xl font-light text-slate-800 dark:text-slate-200 tabular-nums">
                 {stat.value}
               </div>
               <div className="text-xs text-slate-400 dark:text-slate-500 font-medium uppercase tracking-widest mt-0.5">
@@ -145,8 +145,8 @@ export default function Dashboard() {
       </motion.div>
 
       {/* Recent activity */}
-      <div className="px-8 py-6 max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-5">
+      <div className="px-4 sm:px-8 py-6 max-w-6xl mx-auto">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
               Recent Activity
@@ -188,15 +188,24 @@ export default function Dashboard() {
         </div>
 
         {/* Cards */}
-        <div className="space-y-3">
-          {(activeTab === 'all' || activeTab === 'migrations') &&
-            jobs.map((job, i) => <JobCard key={job.id} job={job} index={i} onDelete={handleDeleteJob} />)}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            className="space-y-3"
+            initial="hidden"
+            animate="show"
+            exit="hidden"
+            variants={{ hidden: {}, show: { transition: { staggerChildren: 0.07 } } }}
+          >
+            {(activeTab === 'all' || activeTab === 'migrations') &&
+              jobs.map((job, i) => <JobCard key={job.id} job={job} index={i} onDelete={handleDeleteJob} />)}
 
-          {(activeTab === 'all' || activeTab === 'crawls') &&
-            crawls.map((session, i) => (
-              <CrawlCard key={session.url + session.startedAt} session={session} index={activeTab === 'all' ? jobs.length + i : i} onDelete={handleDeleteCrawl} />
-            ))}
-        </div>
+            {(activeTab === 'all' || activeTab === 'crawls') &&
+              crawls.map((session, i) => (
+                <CrawlCard key={session.url + session.startedAt} session={session} index={activeTab === 'all' ? jobs.length + i : i} onDelete={handleDeleteCrawl} />
+              ))}
+          </motion.div>
+        </AnimatePresence>
 
         {/* Empty state */}
         {jobs.length === 0 && crawls.length === 0 && (

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback } from 'react'
+import { useMemo, useRef, useCallback, useState } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import {
   ModuleRegistry,
@@ -17,6 +17,8 @@ ModuleRegistry.registerModules([ClientSideRowModelModule])
 interface ShopifyCsvViewProps {
   rows: GridRow[]
 }
+
+interface TooltipState { x: number; y: number; msg: string; severity: 'error' | 'warning' }
 
 // ── Exact Shopify CSV export column order ────────────────────────────────────
 const SHOPIFY_HEADERS = [
@@ -333,7 +335,7 @@ function expandRows(rows: GridRow[], activeHeaders: string[], imageCache?: Map<s
     }
     productMap.get(handle)!.push(row)
   }
-
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
   const result: FlatCsvRow[] = []
 
   for (const handle of handleOrder) {
@@ -408,12 +410,13 @@ function CsvStatusRenderer({ data }: ICellRendererParams) {
 
 // ── Data cell renderer ────────────────────────────────────────────────────────
 interface CsvCellProps {
-  value:  unknown
-  data:   FlatCsvRow
-  header: string
+  value:      unknown
+  data:       FlatCsvRow
+  header:     string
+  setTooltip: React.Dispatch<React.SetStateAction<TooltipState | null>>
 }
 
-function CsvCellRenderer({ value, data, header }: CsvCellProps) {
+function CsvCellRenderer({ value, data, header, setTooltip }: CsvCellProps) {
   const row        = data as FlatCsvRow
   const isExtra    = row.__rowType === 'image-extra'
   const meta       = row.__meta
@@ -425,13 +428,21 @@ function CsvCellRenderer({ value, data, header }: CsvCellProps) {
   const textColor = severity === 'error' ? '#be123c' : severity === 'warning' ? '#92400e' : undefined
   const str = value !== undefined && value !== null && value !== '' ? String(value) : ''
 
+  function handleEnter(e: React.MouseEvent) {
+    if (!msg) return
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setTooltip({ x: rect.left + rect.width / 2, y: rect.top - 6, msg, severity: severity ?? 'error' })
+  }
+  function handleLeave() { if (msg) setTooltip(null) }
+
   // Image Src column — plain URL text only
   if (header === 'Image Src' && str) {
     return (
       <div
         className="relative flex items-center w-full h-full px-3 overflow-hidden"
         style={{ color: textColor }}
-        title={str}
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
       >
         <span className="truncate font-mono text-[11px] text-blue-600 dark:text-blue-400">{str}</span>
         {severity && (
@@ -448,7 +459,8 @@ function CsvCellRenderer({ value, data, header }: CsvCellProps) {
     <div
       className="relative flex items-center w-full h-full px-3 font-mono text-xs overflow-hidden"
       style={{ color: textColor }}
-      title={msg ?? str ?? undefined}
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
     >
       {str
         ? <span className="truncate">{str}</span>
@@ -467,6 +479,7 @@ function CsvCellRenderer({ value, data, header }: CsvCellProps) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
   const apiRef = useRef<GridApi<FlatCsvRow> | null>(null)
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null)
 
   // Pre-parse all images once — avoids repeated JSON.parse in every header/cell check
   const imageCache = useMemo(() => buildImageCache(rows), [rows])
@@ -521,7 +534,7 @@ export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
       resizable: true,
       editable: false,
       cellRenderer: 'csvCellRenderer',
-      cellRendererParams: { header: h },
+      cellRendererParams: { header: h, setTooltip },
       cellStyle: (p) => {
         if (!p.data) return {}
         const row = p.data as FlatCsvRow
@@ -540,7 +553,7 @@ export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
     }))
 
     return [...fixed, ...dataCols]
-  }, [activeHeaders])
+  }, [activeHeaders, setTooltip])
 
   const getRowId    = useCallback((p: GetRowIdParams<FlatCsvRow>) => p.data.__id, [])
   const onGridReady = useCallback((e: GridReadyEvent) => { apiRef.current = e.api }, [])
@@ -672,6 +685,21 @@ export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
           .dark .csv-badge-image {
             background: #14532d; color: #86efac;
           }
+          /* Status badges — defined here since ExcelGrid is not mounted in CSV view mode */
+          .swallow-badge-correct,
+          .swallow-badge-failed {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 8px; border-radius: 999px;
+            font-size: 11px; font-weight: 500; white-space: nowrap;
+          }
+          .swallow-badge-correct { background: #d1fae5; color: #065f46; }
+          .swallow-badge-failed  { background: #ffe4e6; color: #9f1239; }
+          .swallow-dot-correct   { width: 6px; height: 6px; border-radius: 50%; background: #10b981; flex-shrink: 0; }
+          .swallow-dot-failed    { width: 6px; height: 6px; border-radius: 50%; background: #f43f5e; flex-shrink: 0; }
+          .dark .swallow-badge-correct { background: rgba(16,185,129,0.15); color: #34d399; }
+          .dark .swallow-badge-failed  { background: rgba(244,63,94,0.15);  color: #fb7185; }
+          .dark .swallow-dot-correct   { background: #34d399; }
+          .dark .swallow-dot-failed    { background: #fb7185; }
         `}</style>
 
         <AgGridReact<FlatCsvRow>
@@ -696,6 +724,27 @@ export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
           }}
         />
       </div>
+
+      {/* Cell warning tooltip — fixed-position, never clipped by grid scroll */}
+      {tooltip && (() => {
+        const isWarn = tooltip.severity === 'warning'
+        const bg    = isWarn ? 'bg-amber-900' : 'bg-rose-900'
+        const text  = isWarn ? 'text-amber-100' : 'text-rose-100'
+        const dot   = isWarn ? 'bg-amber-400' : 'bg-rose-400'
+        const arrow = isWarn ? 'border-t-amber-900' : 'border-t-rose-900'
+        return (
+          <div
+            className="fixed z-[9999] pointer-events-none flex flex-col items-center"
+            style={{ left: tooltip.x, top: tooltip.y, transform: 'translateX(-50%) translateY(-100%)' }}
+          >
+            <div className={`flex items-start gap-1.5 max-w-[260px] px-3 py-2 rounded-lg ${bg} ${text} text-[11px] leading-snug shadow-lg shadow-black/30`}>
+              <span className={`mt-px flex-shrink-0 w-3 h-3 rounded-full ${dot} inline-block`} />
+              <span>{tooltip.msg}</span>
+            </div>
+            <div className={`w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent ${arrow}`} />
+          </div>
+        )
+      })()}
     </div>
   )
 }

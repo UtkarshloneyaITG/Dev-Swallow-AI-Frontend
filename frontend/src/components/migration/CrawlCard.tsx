@@ -58,9 +58,11 @@ export default function CrawlCard({ session, index = 0, onDelete }: CrawlCardPro
   return (
     <motion.div
       className="group relative themed-card rounded-2xl p-5 cursor-pointer hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/20 transition-all duration-200 overflow-hidden"
-      initial={{ opacity: 0, y: 16, scale: 0.97 }}
-      animate={{ opacity: deleting ? 0 : 1, y: 0, scale: deleting ? 0.97 : 1 }}
-      transition={{ duration: 0.5, delay: deleting ? 0 : index * 0.08, ease: [0.16, 1, 0.3, 1] }}
+      variants={{
+        hidden: { opacity: 0, y: 16, scale: 0.97 },
+        show:   { opacity: 1, y: 0,  scale: 1, transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1] } },
+      }}
+      animate={deleting ? { opacity: 0, scale: 0.97 } : undefined}
       onClick={() => !confirmDelete && navigate('/new-migration', { state: { prefillUrl: session.url } })}
     >
       {/* Top row */}

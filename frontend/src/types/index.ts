@@ -50,6 +50,17 @@ export interface FailedRow {
   validationErrors: ValidationError[]
 }
 
+export interface MergedJob {
+  id:           string
+  name:         string
+  sourceJobIds: string[]
+  totalRows:    number
+  correctRows:  number
+  failedRows:   number
+  createdAt:    string
+  updatedAt:    string
+}
+
 export interface ExportRecord {
   type: 'correct' | 'failed' | 'all'
   count: number

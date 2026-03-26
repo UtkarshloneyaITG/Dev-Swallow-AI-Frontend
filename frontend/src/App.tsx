@@ -17,6 +17,8 @@ import FailedRows from './pages/FailedRows'
 import Export from './pages/Export'
 import Settings from './pages/Settings'
 import ResultsGrid from './pages/ResultsGrid'
+import BatchExport from './pages/BatchExport'
+import MergedJobView from './pages/MergedJobView'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
@@ -42,6 +44,8 @@ export default function App() {
           <Route path="/jobs/:jobId/failed" element={<FailedRows />} />
           <Route path="/jobs/:jobId/export" element={<Export />} />
           <Route path="/jobs/:jobId/results" element={<ResultsGrid />} />
+          <Route path="/batch-export" element={<BatchExport />} />
+          <Route path="/merged/:mergedId" element={<MergedJobView />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
 
