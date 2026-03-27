@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Link, useNavigate, Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { motion } from 'framer-motion'
-import { Mail, Lock, ArrowRight } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Mail, Lock, ArrowRight, Settings, Server } from 'lucide-react'
 import Button from '../components/ui/Button'
 import Logo from '../components/ui/Logo'
 import BlobBackground from '../components/ui/BlobBackground'
+import { API_OVERRIDE_KEY, CRAWL_OVERRIDE_KEY } from '../services/api'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -14,6 +15,21 @@ export default function Login() {
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState<string | null>(null)
   const { login, user, isLoading } = useAuth()
+
+  // API override inputs
+  const [showApi, setShowApi] = useState(false)
+  const [apiUrl, setApiUrl]   = useState(localStorage.getItem(API_OVERRIDE_KEY) ?? '')
+  const [crawlUrl, setCrawlUrl] = useState(localStorage.getItem(CRAWL_OVERRIDE_KEY) ?? '')
+  const [apiSaved, setApiSaved] = useState(false)
+
+  function handleSaveApi() {
+    if (apiUrl.trim()) localStorage.setItem(API_OVERRIDE_KEY, apiUrl.trim())
+    else localStorage.removeItem(API_OVERRIDE_KEY)
+    if (crawlUrl.trim()) localStorage.setItem(CRAWL_OVERRIDE_KEY, crawlUrl.trim())
+    else localStorage.removeItem(CRAWL_OVERRIDE_KEY)
+    setApiSaved(true)
+    setTimeout(() => { setApiSaved(false); window.location.reload() }, 600)
+  }
 
   // Already logged in — send to dashboard
   if (!isLoading && user) return <Navigate to="/dashboard" replace />
@@ -138,6 +154,62 @@ export default function Login() {
               Create one
             </Link>
           </p>
+        </div>
+
+        {/* API config toggle */}
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setShowApi(v => !v)}
+            className="mx-auto flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+          >
+            <Settings className="w-3 h-3" />
+            API Settings
+          </button>
+
+          <AnimatePresence>
+            {showApi && (
+              <motion.div
+                className="mt-3 rounded-2xl border border-black/5 dark:border-white/10 bg-white/40 dark:bg-slate-800/40 backdrop-blur-sm p-4 space-y-3"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <div>
+                  <label className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-widest text-slate-400 mb-1">
+                    <Server className="w-3 h-3" /> API Base URL
+                  </label>
+                  <input
+                    type="url"
+                    value={apiUrl}
+                    onChange={e => setApiUrl(e.target.value)}
+                    placeholder={import.meta.env.VITE_API_BASE_URL as string || 'https://your-api.com'}
+                    className="w-full px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-white/60 dark:bg-slate-700/60 text-xs text-slate-700 dark:text-slate-200 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/10 transition-all font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-widest text-slate-400 mb-1">
+                    <Server className="w-3 h-3" /> Crawl API URL
+                  </label>
+                  <input
+                    type="url"
+                    value={crawlUrl}
+                    onChange={e => setCrawlUrl(e.target.value)}
+                    placeholder={import.meta.env.VITE_CRAWL_API_URL as string || 'Same as API Base'}
+                    className="w-full px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-white/60 dark:bg-slate-700/60 text-xs text-slate-700 dark:text-slate-200 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/10 transition-all font-mono"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveApi}
+                  className="w-full py-2 rounded-lg text-xs font-medium bg-black dark:bg-white text-white dark:text-black hover:opacity-90 transition-opacity"
+                >
+                  {apiSaved ? 'Saved — reloading…' : 'Save & Reload'}
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Subtle bottom text */}
