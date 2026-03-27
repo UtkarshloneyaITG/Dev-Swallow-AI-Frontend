@@ -16,7 +16,7 @@
 
   body {
     background-color: var(--page-bg, #f8fafc);
-    @apply text-slate-900 dark:text-slate-100 min-h-screen;
+    @apply dark:text-slate-100 min-h-screen;
     transition: background-color 0.4s ease, color 0.3s ease;
   }
 

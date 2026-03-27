@@ -23,7 +23,12 @@ function formatRelativeTime(dateStr: string): string {
 
 function fmtSeconds(s: number): string {
   const n = Math.floor(s)
-  return n < 60 ? `${n}s` : `${Math.floor(n / 60)}m ${n % 60}s`
+  if (n < 60) return `${n}s`
+  const h = Math.floor(n / 3600)
+  const m = Math.floor((n % 3600) / 60)
+  const sec = n % 60
+  if (h > 0) return `${h}h ${m}m ${sec}s`
+  return `${m}m ${sec}s`
 }
 
 const statusConfig = {
@@ -35,7 +40,7 @@ const statusConfig = {
   idle:      { label: 'Idle',       bg: 'bg-slate-100 dark:bg-slate-800',        text: 'text-slate-500 dark:text-slate-400',     dot: 'bg-slate-400' },
 }
 
-export default function CrawlCard({ session, index = 0, onDelete }: CrawlCardProps) {
+export default function CrawlCard({ session, onDelete }: CrawlCardProps) {
   const navigate = useNavigate()
   const cfg = statusConfig[session.status] ?? statusConfig.idle
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -63,7 +68,7 @@ export default function CrawlCard({ session, index = 0, onDelete }: CrawlCardPro
         show:   { opacity: 1, y: 0,  scale: 1, transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1] } },
       }}
       animate={deleting ? { opacity: 0, scale: 0.97 } : undefined}
-      onClick={() => !confirmDelete && navigate('/new-migration', { state: { prefillUrl: session.url } })}
+      onClick={() => !confirmDelete && session.jobId && navigate(`/crawls/${session.jobId}`)}
     >
       {/* Top row */}
       <div className="flex items-start justify-between mb-4">

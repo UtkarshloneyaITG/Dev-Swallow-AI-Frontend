@@ -1,10 +1,14 @@
-import type { MigrationJob, MigrationStatus, InputFormat, FailedRow, StoredCrawlSession, MergedJob } from '../types'
+import type { MigrationJob, MigrationStatus, InputFormat, FailedRow, MergedJob } from '../types'
 
 // ---------------------------------------------------------------------------
-// Base URL — set VITE_API_BASE_URL in .env
+// Base URL — env vars, overridable at runtime via localStorage (dev/testing)
+// Keys: swallow_api_override | swallow_crawl_override
 // ---------------------------------------------------------------------------
-const API_BASE   = (import.meta.env.VITE_API_BASE_URL  as string) ?? ''
-const CRAWL_BASE = (import.meta.env.VITE_CRAWL_API_URL as string) ?? API_BASE
+export const API_OVERRIDE_KEY   = 'swallow_api_override'
+export const CRAWL_OVERRIDE_KEY = 'swallow_crawl_override'
+
+const API_BASE   = localStorage.getItem(API_OVERRIDE_KEY)   || (import.meta.env.VITE_API_BASE_URL  as string) || ''
+const CRAWL_BASE = localStorage.getItem(CRAWL_OVERRIDE_KEY) || (import.meta.env.VITE_CRAWL_API_URL as string) || API_BASE
 
 // ---------------------------------------------------------------------------
 // Token storage
@@ -12,8 +16,6 @@ const CRAWL_BASE = (import.meta.env.VITE_CRAWL_API_URL as string) ?? API_BASE
 const ACCESS_KEY  = 'swallow_access_token'
 const REFRESH_KEY = 'swallow_refresh_token'
 const USER_KEY    = 'swallow_user'
-const JOBS_PREFIX   = 'swallow_jobs_'
-const CRAWLS_PREFIX = 'swallow_crawls_'
 
 export function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_KEY)
@@ -30,54 +32,6 @@ export function clearTokens(): void {
   localStorage.removeItem(USER_KEY)
 }
 
-// ---------------------------------------------------------------------------
-// Job ID cache (workaround — backend has no GET /jobs list endpoint)
-// ---------------------------------------------------------------------------
-function jobsKey(userId: string): string {
-  return `${JOBS_PREFIX}${userId}`
-}
-
-export function storeJobId(userId: string, jobId: string): void {
-  const key  = jobsKey(userId)
-  const ids: string[] = JSON.parse(localStorage.getItem(key) ?? '[]')
-  if (!ids.includes(jobId)) {
-    localStorage.setItem(key, JSON.stringify([jobId, ...ids]))
-  }
-}
-
-export function getStoredJobIds(userId: string): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(jobsKey(userId)) ?? '[]')
-  } catch {
-    return []
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Crawl session cache — persists recent scraping sessions per user
-// ---------------------------------------------------------------------------
-export function storeCrawlSession(userId: string, session: StoredCrawlSession): void {
-  const key = `${CRAWLS_PREFIX}${userId}`
-  const sessions: StoredCrawlSession[] = JSON.parse(localStorage.getItem(key) ?? '[]')
-  const idx = sessions.findIndex((s) => s.url === session.url)
-  if (idx >= 0) sessions[idx] = session
-  else sessions.unshift(session)
-  localStorage.setItem(key, JSON.stringify(sessions.slice(0, 20)))
-}
-
-export function getStoredCrawlSessions(userId: string): StoredCrawlSession[] {
-  try {
-    return JSON.parse(localStorage.getItem(`${CRAWLS_PREFIX}${userId}`) ?? '[]')
-  } catch {
-    return []
-  }
-}
-
-export function removeCrawlSession(userId: string, url: string): void {
-  const key = `${CRAWLS_PREFIX}${userId}`
-  const sessions: StoredCrawlSession[] = JSON.parse(localStorage.getItem(key) ?? '[]')
-  localStorage.setItem(key, JSON.stringify(sessions.filter((s) => s.url !== url)))
-}
 
 // ---------------------------------------------------------------------------
 // Token refresh
@@ -340,19 +294,17 @@ export const migrationApi = {
     migration_type: string
     input_type: InputFormat
     data: unknown
-  }, userId: string): Promise<CreateJobResponse> {
-    const res = await request<CreateJobResponse>('/api/v1/migration/start', {
+  }): Promise<CreateJobResponse> {
+    return request<CreateJobResponse>('/api/v1/migration/start', {
       method: 'POST',
       body: JSON.stringify({
         ...payload,
         input_type: toBackendInputType(payload.input_type),
       }),
     })
-    storeJobId(userId, res.job_id)
-    return res
   },
 
-  async startFile(formData: FormData, userId: string): Promise<CreateJobResponse> {
+  async startFile(formData: FormData): Promise<CreateJobResponse> {
     const token = getAccessToken()
     const res = await fetch(`${API_BASE}/api/v1/migration/start-file`, {
       method: 'POST',
@@ -366,9 +318,7 @@ export const migrationApi = {
       const body = await res.json().catch(() => ({ detail: res.statusText }))
       throw new Error(body.detail ?? 'Upload failed')
     }
-    const data: CreateJobResponse = await res.json()
-    storeJobId(userId, data.job_id)
-    return data
+    return res.json() as Promise<CreateJobResponse>
   },
 
   async getJob(jobId: string): Promise<MigrationJob> {
@@ -446,13 +396,13 @@ export const migrationApi = {
 }
 
 // ---------------------------------------------------------------------------
-// Crawl API — aligned with scraper.md contract
-// Public:  POST /crawl              POST /crawl/extend
-//          POST /crawl/control/stop  POST /crawl/control/continue
-//          GET  /crawl/status        GET  /crawl/sessions
-//          GET  /download            GET  /results
-// UI-only: POST /crawl/start (non-blocking, used instead of blocking /crawl)
-//          GET  /crawl/session?url=  (single-URL session check)
+// Crawl API — crawlsApi.md endpoint list
+// POST /crawl                POST /crawl/extend
+// POST /crawl/control/stop   POST /crawl/control/continue
+// GET  /crawl/status         GET  /crawl/sessions
+// GET  /download
+// GET  /jobs/user/{id}       GET  /jobs/{id}
+// POST /jobs/products        DELETE /jobs/products   DELETE /jobs/{id}
 // Uses VITE_CRAWL_API_URL as base (falls back to VITE_API_BASE_URL)
 // ---------------------------------------------------------------------------
 async function crawlRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -488,13 +438,6 @@ export interface CrawlStatusResponse {
   url?:                  string
   job_id?:               string | null
   error?:                string
-}
-
-/** Single-URL session check (`GET /crawl/session?url=`) */
-export interface CrawlSessionResponse {
-  has_session:    boolean
-  products_count: number
-  saved_at:       string
 }
 
 /** One entry from `GET /crawl/sessions` */
@@ -538,38 +481,25 @@ export interface CrawlExtendResponse {
   products?: unknown[]
 }
 
-/** `GET /results` */
-export interface CrawlResultsResponse {
-  /** completed | running | no_results */
-  status:         string
-  job_id?:        string
-  url?:           string
-  elapsed_seconds?: number
-  total_products?: number
-  stats?:         Record<string, unknown>
-  products?:      unknown[]
-}
-
 // ── API object ───────────────────────────────────────────────────────────────
 
 export const crawlApi = {
   /**
-   * POST /crawl/start — start a crawl as a background thread (non-blocking).
-   * Body: { name (required), url (required), max_products (required >0),
-   *         max_pages? (optional), max_depth? (optional) }
+   * POST /crawl — start a crawl in the background and return immediately.
+   * Response: { status: "started", message, job_id }
+   * HTTP 409 if another crawl is already running.
+   * Poll GET /crawl/status for live progress.
    */
   async start(
     url: string,
-    params: { name: string; max_products: number; max_pages?: number; max_depth?: number }
+    params: { name?: string; user_id?: string; max_products?: number; max_pages?: number; max_depth?: number }
   ): Promise<{ status: string; job_id?: string; message?: string }> {
-    const body: Record<string, unknown> = {
-      name:         params.name,
-      url,
-      max_products: params.max_products,
-    }
-    if (params.max_pages != null) body.max_pages = params.max_pages
-    if (params.max_depth != null) body.max_depth = params.max_depth
-    return crawlRequest('/crawl/start', {
+    const body: Record<string, unknown> = { url, user_id: params.user_id ?? 'default' }
+    if (params.name)                        body.name         = params.name
+    if (params.max_products != null)        body.max_products = params.max_products
+    if (params.max_pages    != null)        body.max_pages    = params.max_pages
+    if (params.max_depth    != null)        body.max_depth    = params.max_depth
+    return crawlRequest('/crawl', {
       method: 'POST',
       body:   JSON.stringify(body),
     })
@@ -579,21 +509,29 @@ export const crawlApi = {
    * POST /crawl/control/stop — stop the active crawl and save state for resume.
    * Status: stopped | already_stopping | no_active_crawl
    */
-  async stop(): Promise<CrawlStopResponse> {
-    return crawlRequest('/crawl/control/stop', { method: 'POST' })
+  async stop(jobId: string): Promise<CrawlStopResponse> {
+    return crawlRequest('/crawl/control/stop', {
+      method: 'POST',
+      body:   JSON.stringify({ job_id: jobId }),
+    })
   },
 
   /**
-   * POST /crawl/control/continue — resume a paused crawl (no params needed).
+   * POST /crawl/control/continue — resume a paused crawl.
    * Status: resuming | already_running | still_stopping | not_stopped | no_session_data
    */
-  async resume(): Promise<CrawlContinueResponse> {
-    return crawlRequest('/crawl/control/continue', { method: 'POST' })
+  async resume(jobId: string): Promise<CrawlContinueResponse> {
+    return crawlRequest('/crawl/control/continue', {
+      method: 'POST',
+      body:   JSON.stringify({ job_id: jobId }),
+    })
   },
 
   /**
-   * POST /crawl/extend — continue a completed job and scrape additional NEW products.
-   * Skips all previously visited URLs and already-scraped products.
+   * POST /crawl/extend — extend a completed crawl in the background.
+   * Response: { status: "started", message, job_id }
+   * HTTP 409 if another crawl is already running.
+   * Poll GET /crawl/status for live progress.
    */
   async extend(jobId: string, maxProducts: number): Promise<CrawlExtendResponse> {
     return crawlRequest('/crawl/extend', {
@@ -607,40 +545,73 @@ export const crawlApi = {
     return crawlRequest('/crawl/status')
   },
 
-  /** GET /crawl/sessions — list all crawl sessions (paused, completed, all). */
+  /** GET /crawl/sessions — list all saved crawl sessions. */
   async getSessions(): Promise<CrawlSessionsResponse> {
     return crawlRequest('/crawl/sessions')
   },
 
-  /** GET /crawl/session?url= — check if a specific URL has a resumable session. */
-  async getSession(url: string): Promise<CrawlSessionResponse> {
-    const qs = new URLSearchParams({ url })
-    return crawlRequest(`/crawl/session?${qs}`)
-  },
-
   /**
-   * GET /results — products from the most recently completed crawl job.
-   * Status: completed | running | no_results
+   * Build a download URL: GET /download?name=&job_id=&type=
+   * At least one of (job_id, name) must be provided — backend returns 422 otherwise.
    */
-  async getResults(): Promise<CrawlResultsResponse> {
-    return crawlRequest('/results')
-  },
-
-  /**
-   * GET /download — download scraped products as a file attachment.
-   * type: csv | json | jsonl (default: csv)
-   */
-  getDownloadUrl(params: { job_id?: string; name?: string; type?: 'csv' | 'json' | 'jsonl' }): string {
+  getDownloadUrl(params: { job_id?: string; name?: string; type: 'csv' | 'json' | 'jsonl' }): string {
     const qs = new URLSearchParams()
     if (params.job_id) qs.set('job_id', params.job_id)
     if (params.name)   qs.set('name',   params.name)
-    if (params.type)   qs.set('type',   params.type)
+    qs.set('type', params.type)
     return `${CRAWL_BASE}/download?${qs}`
   },
 
-  /** GET /health — liveness check. */
-  async health(): Promise<{ status: string }> {
-    return crawlRequest('/health')
+  // ── Jobs ──────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /jobs/user/{user_id} — list all crawl jobs for a user, newest first.
+   * Returns { user_id, jobs: [{ job_id, url, name, status, elapsed_seconds, stats, ... }] }
+   */
+  async listUserJobs(userId: string): Promise<{ user_id: string; jobs: Record<string, unknown>[] }> {
+    return crawlRequest(`/jobs/user/${encodeURIComponent(userId)}`)
+  },
+
+  /**
+   * GET /jobs/{job_id} — get live status of a specific crawl job (in-memory).
+   * When status=completed, response includes all scraped products.
+   */
+  async getJob(jobId: string): Promise<Record<string, unknown>> {
+    return crawlRequest(`/jobs/${encodeURIComponent(jobId)}`)
+  },
+
+  /**
+   * POST /jobs/products — fetch scraped products for a job with pagination.
+   * Body: { job_id (required), page? (1-based), page_size? (max 500, default 50) }
+   */
+  async getJobProducts(params: { job_id: string; page?: number; page_size?: number }): Promise<{
+    job_id: string; name: string; source_url: string; status: string
+    total_products: number; page: number; page_size: number; total_pages: number
+    products: unknown[]
+  }> {
+    return crawlRequest('/jobs/products', {
+      method: 'POST',
+      body:   JSON.stringify(params),
+    })
+  },
+
+  /**
+   * DELETE /jobs/{job_id} — permanently delete a job and ALL its products.
+   * If the job is running it will be cancelled first.
+   */
+  async deleteCrawlJob(jobId: string): Promise<{ job_id: string; jobs_deleted: number; products_deleted: number; message: string }> {
+    return crawlRequest(`/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' })
+  },
+
+  /**
+   * DELETE /jobs/products — delete selected product rows from a job by index.
+   * Body: { job_id (required), indexes (required) — list of idx values }
+   */
+  async deleteJobProducts(jobId: string, indexes: number[]): Promise<{ job_id: string; deleted: number; message: string }> {
+    return crawlRequest('/jobs/products', {
+      method: 'DELETE',
+      body:   JSON.stringify({ job_id: jobId, indexes }),
+    })
   },
 }
 

@@ -19,6 +19,7 @@ import Settings from './pages/Settings'
 import ResultsGrid from './pages/ResultsGrid'
 import BatchExport from './pages/BatchExport'
 import MergedJobView from './pages/MergedJobView'
+import CrawlDetail from './pages/CrawlDetail'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/jobs/:jobId/results" element={<ResultsGrid />} />
           <Route path="/batch-export" element={<BatchExport />} />
           <Route path="/merged/:mergedId" element={<MergedJobView />} />
+          <Route path="/crawls/:jobId" element={<CrawlDetail />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
 

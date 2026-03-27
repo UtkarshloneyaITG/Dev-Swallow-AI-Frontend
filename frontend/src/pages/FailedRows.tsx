@@ -18,16 +18,20 @@ export default function FailedRows() {
   const [job, setJob] = useState<{ id: string; name: string; failedRows: number } | null>(null)
   const [rows, setRows] = useState<FailedRow[]>([])
   const [editingRow, setEditingRow] = useState<FailedRow | null>(null)
+  const [loading, setLoading] = useState(true)
   const pageRef = usePageAnimation()
 
   useEffect(() => {
     if (!jobId) return
-    migrationApi.getJob(jobId)
-      .then((j) => setJob({ id: j.id, name: j.name, failedRows: j.failedRows }))
-      .catch(console.error)
-    migrationApi.getRows(jobId, { status: 'failed', limit: 500 })
-      .then(setRows)
-      .catch(console.error)
+    setLoading(true)
+    Promise.all([
+      migrationApi.getJob(jobId)
+        .then((j) => setJob({ id: j.id, name: j.name, failedRows: j.failedRows }))
+        .catch(console.error),
+      migrationApi.getRows(jobId, { status: 'failed', limit: 500 })
+        .then(setRows)
+        .catch(console.error),
+    ]).finally(() => setLoading(false))
   }, [jobId])
 
   async function handleRetry(rowId: string) {
@@ -57,11 +61,8 @@ export default function FailedRows() {
     }
   }
 
-  if (!job) {
-    return (
-      <PageLoader label="Job not found." />
-    )
-  }
+  if (loading) return <PageLoader label="Loading failed rows…" />
+  if (!job) return <PageLoader label="Job not found." />
 
   return (
     <div ref={pageRef} className="min-h-screen px-8 py-10">

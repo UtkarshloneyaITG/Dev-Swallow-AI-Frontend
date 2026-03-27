@@ -3,7 +3,7 @@ import { usePageAnimation } from '../hooks/usePageAnimation'
 import type { ComponentType, FormEvent, DragEvent, ChangeEvent } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { migrationApi, crawlApi, storeCrawlSession } from '../services/api'
+import { migrationApi, crawlApi } from '../services/api'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ShoppingBag,
@@ -25,16 +25,38 @@ import {
   Clock,
   AlertTriangle,
   Download,
+  Terminal,
 } from 'lucide-react'
 import Button from '../components/ui/Button'
 import WalkingPets from '../components/ui/WalkingPets'
+import { PageLoader } from '../components/ui/Spinner'
 import type { MigrationType, InputFormat } from '../types'
 
 type CrawlState = 'idle' | 'crawling' | 'stopping' | 'paused' | 'completed' | 'error'
 
 function fmtSeconds(s: number): string {
   const n = Math.floor(s)
-  return n < 60 ? `${n}s` : `${Math.floor(n / 60)}m ${n % 60}s`
+
+  if (n < 60) return `${n}s`
+
+  const m = Math.floor(n / 60)
+  const sec = n % 60
+
+  return sec === 0 ? `${m}m` : `${m}m ${sec}s`
+}
+
+function parseCurlUrl(curlCmd: string): string {
+  const patterns = [
+    /\s'(https?:\/\/[^']+)'/,
+    /\s"(https?:\/\/[^"]+)"/,
+    /--url\s+'?(https?:\/\/\S+?)'?(?:\s|$)/,
+    /\s(https?:\/\/\S+)/,
+  ]
+  for (const pat of patterns) {
+    const m = curlCmd.match(pat)
+    if (m) return m[1].replace(/['"\\]$/, '')
+  }
+  return ''
 }
 
 
@@ -142,15 +164,20 @@ export default function NewMigration() {
   const [crawlState, setCrawlState] = useState<CrawlState>('idle')
   const [crawlStats, setCrawlStats] = useState({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
   const [crawlJobId, setCrawlJobId] = useState<string | null>(null)
-  const [urlSession, setUrlSession] = useState<{ productsCount: number; savedAt: string } | null>(null)
   const [maxPages, setMaxPages] = useState(100)
   const [maxDepth, setMaxDepth] = useState(5)
   const [maxProducts, setMaxProducts] = useState(0)
   const [crawlError, setCrawlError] = useState('')
+  const [crawlName, setCrawlName] = useState('')
   const [extending, setExtending] = useState(false)
   const [extendCount, setExtendCount] = useState(50)
+  const [crawlInputMode, setCrawlInputMode] = useState<'url' | 'curl'>('url')
+  const [curlQuery, setCurlQuery] = useState('')
   const crawlIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const sessionCheckedUrl = useRef('')
+
+  const pollErrorCount = useRef(0)
+
+  const [initializing, setInitializing] = useState(true)
 
   // On mount: hydrate only if a crawl is actively running right now
   useEffect(() => {
@@ -168,6 +195,7 @@ export default function NewMigration() {
       if (d.url)    setWebsiteUrl((prev) => prev || d.url!)
       setCrawlState(d.status)
     }).catch(() => { /* backend unreachable — stay idle */ })
+      .finally(() => setInitializing(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -177,6 +205,8 @@ export default function NewMigration() {
     crawlIntervalRef.current = setInterval(async () => {
       try {
         const d = await crawlApi.getStatus()
+        pollErrorCount.current = 0
+        setCrawlError('')
         const stats = {
           pagesVisited:    d.pages_visited        ?? 0,
           productsScraped: d.products_scraped     ?? d.products_count ?? 0,
@@ -189,68 +219,56 @@ export default function NewMigration() {
         // Sync UI state with backend status
         if (d.status && d.status !== crawlState) {
           setCrawlState(d.status)
-          if (user && websiteUrl) {
-            storeCrawlSession(user.id, {
-              url: websiteUrl, startedAt: new Date().toISOString(),
-              status: d.status as import('../types').CrawlSessionStatus,
-              pagesVisited: stats.pagesVisited, productsScraped: stats.productsScraped,
-              elapsedSeconds: stats.elapsedSeconds, jobId: d.job_id ?? null,
-            })
-          }
         }
-      } catch { /* ignore transient errors */ }
+      } catch {
+        pollErrorCount.current += 1
+        if (pollErrorCount.current >= 3) {
+          setCrawlError('Status endpoint unreachable — retrying…')
+        }
+      }
     }, 2000)
     return () => { if (crawlIntervalRef.current) clearInterval(crawlIntervalRef.current) }
   }, [crawlState, websiteUrl, user])
 
-  // Check for existing session when URL changes
-  useEffect(() => {
-    if (!websiteUrl || !websiteUrl.startsWith('http') || websiteUrl === sessionCheckedUrl.current) return
-    sessionCheckedUrl.current = websiteUrl
-    crawlApi.getSession(websiteUrl)
-      .then((d) => setUrlSession(d.has_session ? { productsCount: d.products_count, savedAt: d.saved_at } : null))
-      .catch(() => setUrlSession(null))
-  }, [websiteUrl])
-
   // ── Crawl actions ──────────────────────────────────────────────────────
 
   async function handleStartCrawl() {
-    if (!websiteUrl.startsWith('http')) { setErrors({ url: 'URL must start with http:// or https://' }); return }
-    if (maxProducts <= 0) { setErrors({ url: 'Max Products must be > 0 to start a crawl.' }); return }
+    let effectiveUrl = websiteUrl
+    if (crawlInputMode === 'curl') {
+      if (!curlQuery.trim()) { setErrors({ url: 'Paste a cURL command.' }); return }
+      effectiveUrl = parseCurlUrl(curlQuery)
+      if (!effectiveUrl) { setErrors({ url: 'Could not extract a URL from the cURL command.' }); return }
+      setWebsiteUrl(effectiveUrl)
+    }
+    if (!effectiveUrl.startsWith('http')) { setErrors({ url: 'URL must start with http:// or https://' }); return }
     // Build unique name: use jobName if set, otherwise derive from hostname + date
-    const crawlName = jobName.trim() ||
-      websiteUrl.replace(/^https?:\/\//, '').split('/')[0].replace(/\W+/g, '-').toLowerCase() +
+    const builtName = jobName.trim() ||
+      effectiveUrl.replace(/^https?:\/\//, '').split('/')[0].replace(/\W+/g, '-').toLowerCase() +
       '-' + new Date().toISOString().slice(0, 7)
-    localStorage.setItem('swallow_crawl_settings', JSON.stringify({ maxProducts, maxPages, maxDepth }))
+    setCrawlName(builtName)
     setCrawlState('crawling')
-    setUrlSession(null)
     setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
     setCrawlError('')
-    if (user) {
-      storeCrawlSession(user.id, {
-        url: websiteUrl, startedAt: new Date().toISOString(),
-        status: 'crawling', pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0,
-      })
-    }
     try {
-      const d = await crawlApi.start(websiteUrl, {
-        name:         crawlName,
+      const d = await crawlApi.start(effectiveUrl, {
+        name:         builtName,
+        user_id:      user?.id ?? 'default',
         max_products: maxProducts,
         max_pages:    maxPages,
         max_depth:    maxDepth,
       })
       if (d.job_id) setCrawlJobId(d.job_id)
-      if (d.status === 'already_running') {
+      // POST /crawl returns immediately ("started") — poll takes over from here
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to start crawl'
+      // HTTP 409 = another crawl already running
+      if (msg.includes('409') || msg.toLowerCase().includes('already')) {
         setCrawlState('idle')
         setCrawlError('A crawl is already running. Stop it first.')
+      } else {
+        setCrawlState('error')
+        setCrawlError(msg)
       }
-    } catch (err) {
-      setCrawlState('error')
-      setCrawlError(err instanceof Error ? err.message : 'Failed to start crawl')
-      if (user) storeCrawlSession(user.id, {
-        url: websiteUrl, startedAt: new Date().toISOString(),
-        status: 'error', pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0,
-      })
     }
   }
 
@@ -259,7 +277,7 @@ export default function NewMigration() {
     setCrawlState('stopping')
     setCrawlError('')
     try {
-      const d = await crawlApi.stop()
+      const d = await crawlApi.stop(crawlJobId ?? '')
       if (d.status === 'no_active_crawl') {
         setCrawlState('idle')
         setCrawlError('No active crawl to stop.')
@@ -272,10 +290,9 @@ export default function NewMigration() {
   /** POST /crawl/control/continue — no URL param needed */
   async function handleResumeCrawl() {
     setCrawlState('crawling')
-    setUrlSession(null)
     setCrawlError('')
     try {
-      const d = await crawlApi.resume()
+      const d = await crawlApi.resume(crawlJobId ?? '')
       if (d.job_id) setCrawlJobId(d.job_id)
       if (d.status === 'already_running') {
         // Already going — stay in crawling
@@ -284,16 +301,13 @@ export default function NewMigration() {
         setCrawlError('Previous crawl is still saving — wait a moment and try again.')
       } else if (d.status === 'not_stopped' || d.status === 'no_session_data') {
         setCrawlState('idle')
-        setUrlSession(null)
         setCrawlError('No saved session found for this URL.')
       }
       // 'resuming' → crawling, poll takes over
     } catch { setCrawlState('paused') }
   }
 
-  /** POST /crawl/extend — scrape additional NEW products from a completed job.
-   *  /crawl/extend is a BLOCKING endpoint (returns only when done), so we fire
-   *  it without awaiting and let the status poll track live progress. */
+  /** POST /crawl/extend — non-blocking: starts background extension, returns immediately. */
   async function handleExtendCrawl() {
     if (extending) return
     setExtending(true)
@@ -314,22 +328,31 @@ export default function NewMigration() {
       return
     }
 
-    // Flip UI into crawling mode immediately so the poll kicks in
-    setCrawlState('crawling')
-    setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
-    setExtending(false)
-
-    // Fire-and-forget — the blocking response arrives when done
-    crawlApi.extend(jobId, extendCount)
-      .then((d) => { if (d.job_id) setCrawlJobId(d.job_id) })
-      .catch((err) => {
-        setCrawlError(err instanceof Error ? err.message : 'Extend failed')
-        setCrawlState('completed')
-      })
+    try {
+      // Non-blocking — returns { status: "started", job_id } immediately
+      const d = await crawlApi.extend(jobId, extendCount)
+      if (d.job_id) setCrawlJobId(d.job_id)
+      // Flip UI into crawling mode so the poll takes over
+      setCrawlState('crawling')
+      setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Extend failed'
+      if (msg.includes('409') || msg.toLowerCase().includes('already')) {
+        setCrawlError('A crawl is already running. Stop it first.')
+      } else {
+        setCrawlError(msg)
+      }
+    } finally {
+      setExtending(false)
+    }
   }
 
   function goToStep2() {
-    if (websiteUrl.trim() && !/^https?:\/\/.+/.test(websiteUrl.trim())) {
+    if (crawlInputMode === 'curl' && curlQuery.trim() && !parseCurlUrl(curlQuery)) {
+      setErrors({ url: 'Could not extract a URL from the cURL command.' })
+      return
+    }
+    if (crawlInputMode === 'url' && websiteUrl.trim() && !/^https?:\/\/.+/.test(websiteUrl.trim())) {
       setErrors({ url: 'URL must start with http:// or https://' })
       return
     }
@@ -357,7 +380,6 @@ export default function NewMigration() {
     if (!validate()) return
     setSubmitting(true)
     try {
-      const userId = user?.id ?? 'anonymous'
       let jobId: string
 
       if (file) {
@@ -365,7 +387,7 @@ export default function NewMigration() {
         fd.append('job_name', jobName)
         fd.append('migration_type', migrationType)
         fd.append('file', file)
-        const res = await migrationApi.startFile(fd, userId)
+        const res = await migrationApi.startFile(fd)
         jobId = res.job_id
       } else {
         // google_sheet → URL; website crawl → websiteUrl; paste → rawData
@@ -376,8 +398,7 @@ export default function NewMigration() {
             : websiteUrl.trim() && !rawData.trim() ? 'website_url' as InputFormat
               : inputFormat
         const res = await migrationApi.start(
-          { job_name: jobName, migration_type: migrationType, input_type: effectiveInputType, data },
-          userId
+          { job_name: jobName, migration_type: migrationType, input_type: effectiveInputType, data }
         )
         jobId = res.job_id
       }
@@ -400,6 +421,8 @@ export default function NewMigration() {
     const f = e.target.files?.[0]
     if (f) setFile(f)
   }
+
+  if (initializing) return <PageLoader label="Checking crawl status…" />
 
   return (
     <div ref={pageRef} className="min-h-screen relative z-10">
@@ -464,11 +487,17 @@ export default function NewMigration() {
                 <div className="themed-card rounded-2xl p-6 space-y-5">
                   <div className="flex items-center gap-3">
                     <div className="p-2.5 rounded-xl bg-[rgb(var(--accent,_0_0_0))]/10">
-                      <Globe className="w-5 h-5 text-[rgb(var(--accent,_0_0_0))]" />
+                      {crawlInputMode === 'curl'
+                        ? <Terminal className="w-5 h-5 text-[rgb(var(--accent,_0_0_0))]" />
+                        : <Globe className="w-5 h-5 text-[rgb(var(--accent,_0_0_0))]" />}
                     </div>
                     <div>
                       <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Website Crawler</p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Enter a store URL to crawl and extract product data automatically</p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+                        {crawlInputMode === 'curl'
+                          ? 'Paste a cURL command to crawl and extract product data'
+                          : 'Enter a store URL to crawl and extract product data automatically'}
+                      </p>
                     </div>
                     {crawlState !== 'idle' && (
                       <span className={`ml-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${crawlState === 'crawling' ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400' :
@@ -487,31 +516,79 @@ export default function NewMigration() {
                     )}
                   </div>
 
-                  {/* URL grouped input */}
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">Target URL</label>
-                    <div className={`flex items-center rounded-xl overflow-hidden themed-input focus-within:ring-2 focus-within:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all${errors.url ? ' ring-2 ring-rose-300 dark:ring-rose-700' : ''}`}>
-                      <span className="px-3 py-3 text-xs font-mono text-slate-400 dark:text-slate-500 bg-black/5 dark:bg-white/5 border-r border-black/8 dark:border-white/8 select-none whitespace-nowrap">
-                        https://
-                      </span>
-                      <input
-                        type="text"
-                        value={websiteUrl}
+                  {/* Input mode toggle */}
+                  <div className="flex items-center gap-1 p-1 rounded-xl bg-black/5 dark:bg-white/5 w-fit">
+                    {(['url', 'curl'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
                         disabled={crawlState === 'crawling' || crawlState === 'stopping'}
-                        onChange={(e) => { setWebsiteUrl(e.target.value); setErrors({}); sessionCheckedUrl.current = '' }}
-                        placeholder="example.com/products"
-                        className="flex-1 px-3 py-3 bg-transparent text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none font-mono disabled:opacity-50"
-                      />
-                      {websiteUrl && crawlState === 'idle' && (
-                        <button type="button"
-                          onClick={() => { setWebsiteUrl(''); setUrlSession(null); sessionCheckedUrl.current = '' }}
-                          className="px-3 text-slate-300 dark:text-slate-600 hover:text-rose-400 dark:hover:text-rose-500 transition-colors flex-shrink-0">
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    {errors.url && <p className="text-xs text-rose-500 mt-1.5">{errors.url}</p>}
+                        onClick={() => { setCrawlInputMode(mode); setErrors({}) }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 disabled:opacity-50 ${
+                          crawlInputMode === mode
+                            ? 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 shadow-sm'
+                            : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+                        }`}
+                      >
+                        {mode === 'url' ? <Globe className="w-3.5 h-3.5" /> : <Terminal className="w-3.5 h-3.5" />}
+                        {mode === 'url' ? 'Website URL' : 'cURL Command'}
+                      </button>
+                    ))}
                   </div>
+
+                  {/* URL grouped input */}
+                  {crawlInputMode === 'url' ? (
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">Target URL</label>
+                      <div className={`flex items-center rounded-xl overflow-hidden themed-input focus-within:ring-2 focus-within:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all${errors.url ? ' ring-2 ring-rose-300 dark:ring-rose-700' : ''}`}>
+                        <span className="px-3 py-3 text-xs font-mono text-slate-400 dark:text-slate-500 bg-black/5 dark:bg-white/5 border-r border-black/8 dark:border-white/8 select-none whitespace-nowrap">
+                          https://
+                        </span>
+                        <input
+                          type="text"
+                          value={websiteUrl}
+                          disabled={crawlState === 'crawling' || crawlState === 'stopping'}
+                          onChange={(e) => { setWebsiteUrl(e.target.value); setErrors({}) }}
+                          placeholder="example.com/products"
+                          className="flex-1 px-3 py-3 bg-transparent text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none font-mono disabled:opacity-50"
+                        />
+                        {websiteUrl && crawlState === 'idle' && (
+                          <button type="button"
+                            onClick={() => { setWebsiteUrl(''); setErrors({}) }}
+                            className="px-3 text-slate-300 dark:text-slate-600 hover:text-rose-400 dark:hover:text-rose-500 transition-colors flex-shrink-0">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {errors.url && <p className="text-xs text-rose-500 mt-1.5">{errors.url}</p>}
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">cURL Command</label>
+                      <div className={`rounded-xl overflow-hidden themed-input focus-within:ring-2 focus-within:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all${errors.url ? ' ring-2 ring-rose-300 dark:ring-rose-700' : ''}`}>
+                        <textarea
+                          value={curlQuery}
+                          disabled={crawlState === 'crawling' || crawlState === 'stopping'}
+                          onChange={(e) => { setCurlQuery(e.target.value); setErrors({}) }}
+                          placeholder={`curl -X GET 'https://example.com/products' \\\n  -H 'Accept: application/json'`}
+                          rows={4}
+                          className="w-full px-3 py-3 bg-transparent text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none font-mono resize-none disabled:opacity-50"
+                        />
+                      </div>
+                      {curlQuery && (() => {
+                        const parsed = parseCurlUrl(curlQuery)
+                        return (
+                          <p className="text-[10px] mt-1.5 font-mono truncate">
+                            <span className="text-slate-400 dark:text-slate-500">URL: </span>
+                            {parsed
+                              ? <span className="text-slate-600 dark:text-slate-300">{parsed}</span>
+                              : <span className="text-amber-500">could not parse URL</span>}
+                          </p>
+                        )
+                      })()}
+                      {errors.url && <p className="text-xs text-rose-500 mt-1.5">{errors.url}</p>}
+                    </div>
+                  )}
 
                   {/* Job Name */}
                   <div>
@@ -521,23 +598,11 @@ export default function NewMigration() {
                     <input
                       type="text"
                       value={jobName}
-                      onChange={(e) => setJobName(e.target.value)}
+                      onChange={(e) => { setJobName(e.target.value); setErrors({}) }}
                       placeholder={websiteUrl ? websiteUrl.replace(/^https?:\/\//, '').split('/')[0] + ' migration' : 'e.g. Nike store migration'}
                       className="w-full px-3 py-3 rounded-xl themed-input bg-transparent text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all"
                     />
                   </div>
-
-                  {/* Session banner */}
-                  {urlSession && crawlState === 'idle' && (
-                    <div className="flex items-start gap-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/50 rounded-xl px-4 py-3">
-                      <RotateCcw className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
-                      <div className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
-                        <span className="font-semibold">Previous session found</span> — {urlSession.productsCount} products already scraped
-                        {urlSession.savedAt && <span className="text-blue-500 dark:text-blue-400"> (saved {urlSession.savedAt.slice(0, 16).replace('T', ' ')})</span>}.
-                        {' '}Click <span className="font-semibold">Resume</span> to continue or <span className="font-semibold">Start New</span> to crawl fresh.
-                      </div>
-                    </div>
-                  )}
 
                   {/* Crawl settings — only when idle/paused */}
                   {(crawlState === 'idle' || crawlState === 'paused') && (
@@ -558,7 +623,7 @@ export default function NewMigration() {
                             <div className="flex items-stretch themed-input rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all">
                               <input
                                 type="number" min={min} max={max} step={s} value={value}
-                                onChange={(e) => set(Number(e.target.value))}
+                                onChange={(e) => { set(Number(e.target.value)); setErrors({}) }}
                                 className="flex-1 min-w-0 pl-3 py-2.5 bg-transparent text-sm text-slate-800 dark:text-slate-100 focus:outline-none tabular-nums
                                   [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                               />
@@ -566,7 +631,7 @@ export default function NewMigration() {
                               <div className="flex flex-col border-l border-black/8 dark:border-white/8 flex-shrink-0">
                                 <button
                                   type="button"
-                                  onClick={() => set(Math.min(max, value + s))}
+                                  onClick={() => { set(Math.min(max, value + s)); setErrors({}) }}
                                   className="flex-1 flex items-center justify-center px-2.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors border-b border-black/8 dark:border-white/8 leading-none"
                                 >
                                   <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
@@ -575,7 +640,7 @@ export default function NewMigration() {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => set(Math.max(min, value - s))}
+                                  onClick={() => { set(Math.max(min, value - s)); setErrors({}) }}
                                   className="flex-1 flex items-center justify-center px-2.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors leading-none"
                                 >
                                   <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
@@ -699,7 +764,7 @@ export default function NewMigration() {
                         <div className="flex items-center gap-2 flex-wrap">
                           {(['csv', 'json', 'jsonl'] as const).map((fmt) => {
                             const url = crawlApi.getDownloadUrl({
-                              ...(crawlJobId ? { job_id: crawlJobId } : { name: jobName || websiteUrl.replace(/^https?:\/\//, '').split('/')[0] }),
+                              ...(crawlJobId ? { job_id: crawlJobId } : { name: crawlName }),
                               type: fmt,
                             })
                             return (
@@ -728,20 +793,9 @@ export default function NewMigration() {
                 <div className="flex items-center gap-3 flex-wrap">
                   {/* IDLE */}
                   {crawlState === 'idle' && (
-                    urlSession ? (
-                      <>
-                        <Button type="button" variant="primary" size="lg" icon={<Play className="w-4 h-4" />} onClick={handleResumeCrawl} disabled={!websiteUrl}>
-                          Resume Crawling
-                        </Button>
-                        <Button type="button" variant="secondary" size="lg" onClick={handleStartCrawl} disabled={!websiteUrl}>
-                          Start New
-                        </Button>
-                      </>
-                    ) : (
-                      <Button type="button" variant="primary" size="lg" icon={<Play className="w-4 h-4" />} onClick={handleStartCrawl} disabled={!websiteUrl}>
-                        Start Crawl
-                      </Button>
-                    )
+                    <Button type="button" variant="primary" size="lg" icon={<Play className="w-4 h-4" />} onClick={handleStartCrawl} disabled={!websiteUrl}>
+                      Start Crawl
+                    </Button>
                   )}
 
                   {/* CRAWLING */}
@@ -757,7 +811,7 @@ export default function NewMigration() {
                       <Button type="button" variant="primary" size="lg" icon={<Play className="w-4 h-4" />} onClick={handleResumeCrawl}>
                         Resume Crawling
                       </Button>
-                      <Button type="button" variant="secondary" size="lg" icon={<RotateCcw className="w-4 h-4" />} onClick={() => { setCrawlState('idle'); setUrlSession(null); setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 }) }}>
+                      <Button type="button" variant="secondary" size="lg" icon={<RotateCcw className="w-4 h-4" />} onClick={() => { setCrawlState('idle'); setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 }) }}>
                         Start New
                       </Button>
                     </>

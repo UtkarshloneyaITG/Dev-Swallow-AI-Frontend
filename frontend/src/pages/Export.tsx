@@ -71,12 +71,15 @@ export default function Export() {
 
   const [job, setJob] = useState<{ id: string; name: string; correctRows: number; failedRows: number; totalRows: number } | null>(null)
   const [downloading, setDownloading] = useState<ExportType | null>(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!jobId) return
+    setLoading(true)
     migrationApi.getJob(jobId)
       .then((j) => setJob({ id: j.id, name: j.name, correctRows: j.correctRows, failedRows: j.failedRows, totalRows: j.totalRows }))
       .catch(console.error)
+      .finally(() => setLoading(false))
   }, [jobId])
 
   function countFor(type: ExportType): number {
@@ -99,11 +102,8 @@ export default function Export() {
     }
   }
 
-  if (!job) {
-    return (
-      <PageLoader />
-    )
-  }
+  if (loading) return <PageLoader label="Loading job…" />
+  if (!job) return <PageLoader label="Job not found." />
 
   return (
     <div ref={pageRef} className="min-h-screen px-8 py-10">

@@ -26,6 +26,7 @@ import { migrationApi, getAccessToken } from '../services/api'
 import WalkingPets from '../components/ui/WalkingPets'
 
 const SOCKET_URL = (import.meta.env.VITE_API_BASE_URL as string) ?? ''
+console.log(SOCKET_URL, "soket /////////////////")
 
 /** Merge a raw socket payload into the current job state.
  *  Handles both flat  { processed_rows: 5 }
@@ -60,6 +61,7 @@ export default function JobProgress() {
   const pageRef = usePageAnimation()
 
   const [job, setJob] = useState<MigrationJob | null>(null)
+  const [loading, setLoading] = useState(true)
   const [stopping, setStopping] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [restarting, setRestarting] = useState(false)
@@ -107,7 +109,7 @@ export default function JobProgress() {
       const token = getAccessToken()
       const socket = io(SOCKET_URL, {
         auth:                 token ? { token } : {},
-        transports:           ['polling'],
+        transports:           ["WebSocket",'polling'],
         extraHeaders:         { 'ngrok-skip-browser-warning': '1' },
         reconnection:         true,
         reconnectionDelay:    1000,
@@ -124,37 +126,44 @@ export default function JobProgress() {
       }
 
       socket.on('connect', () => {
+        console.log('[Socket] connected, id:', socket.id)
         setSocketStatus('connected')
         stopPoll()
         joinRoom()
       })
 
-      const handleUpdate = (raw: Record<string, unknown>) => {
+      const handleUpdate = (eventName: string, raw: Record<string, unknown>) => {
+        console.log(`[Socket] event="${eventName}"`, 'raw data in soket' , raw)
         const incoming = (raw.job_id ?? raw.jobId ?? raw.id) as string | undefined
         if (incoming && incoming !== jobId) return
         setJob((prev) => prev ? applyUpdate(prev, raw) : prev)
       }
 
-      socket.on('job_update',      handleUpdate)
-      socket.on('job_progress',    handleUpdate)
-      socket.on('progress_update', handleUpdate)
-      socket.on('status_update',   handleUpdate)
-      socket.on('progress',        handleUpdate)
-      socket.on('job_complete',    handleUpdate)
-      socket.on('job_completed',   handleUpdate)
-      socket.on('job_failed',      handleUpdate)
-      socket.on('job_error',       handleUpdate)
+      const makeHandler = (eventName: string) => (raw: Record<string, unknown>) => handleUpdate(eventName, raw)
 
-      socket.on('connect_error', () => {
+      socket.on('job_update',      makeHandler('job_update'))
+      socket.on('job_progress',    makeHandler('job_progress'))
+      socket.on('progress_update', makeHandler('progress_update'))
+      socket.on('status_update',   makeHandler('status_update'))
+      socket.on('progress',        makeHandler('progress'))
+      socket.on('job_complete',    makeHandler('job_complete'))
+      socket.on('job_completed',   makeHandler('job_completed'))
+      socket.on('job_failed',      makeHandler('job_failed'))
+      socket.on('job_error',       makeHandler('job_error'))
+
+      socket.on('connect_error', (err) => {
+        console.log('[Socket] connect_error', err.message)
         setSocketStatus('disconnected')
         startFallbackPoll(jobId)
       })
-      socket.on('disconnect', () => {
+      socket.on('disconnect', (reason) => {
+        console.log('[Socket] disconnected, reason:', reason)
         setSocketStatus('disconnected')
         startFallbackPoll(jobId)
       })
       // Socket.IO v4 — reconnect is a Manager event
-      socket.io.on('reconnect', () => {
+      socket.io.on('reconnect', (attempt) => {
+        console.log('[Socket] reconnected after', attempt, 'attempt(s)')
         setSocketStatus('connected')
         stopPoll()
         joinRoom()
@@ -163,6 +172,7 @@ export default function JobProgress() {
 
     migrationApi.getJob(jobId).then((j) => {
       setJob(j)
+      setLoading(false)
 
       if (j.status === 'processing') {
         connectSocket()
@@ -186,7 +196,7 @@ export default function JobProgress() {
           }).catch(() => {})
         }, 3000)
       }
-    }).catch(console.error)
+    }).catch((err) => { console.error(err); setLoading(false) })
 
     return () => {
       if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
@@ -252,11 +262,8 @@ export default function JobProgress() {
     }
   }
 
-  if (!job) {
-    return (
-      <PageLoader />
-    )
-  }
+  if (loading) return <PageLoader label="Loading job…" />
+  if (!job) return <PageLoader label="Job not found." />
 
   const isLive = job.status === 'processing'
   const isDone = job.status === 'completed'

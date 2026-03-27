@@ -408,6 +408,7 @@ export default function ResultsGrid() {
   const [rows, setRows] = useState<GridRow[]>([])
   const [rawRows, setRawRows] = useState<FailedRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [rowsLoading, setRowsLoading] = useState(false)
 
   const [filterTab, setFilterTab] = useState<FilterTab>('all')
   const [search, setSearch] = useState('')
@@ -422,37 +423,46 @@ export default function ResultsGrid() {
   const shopifyCsvEnabled  = localStorage.getItem(SHOPIFY_CSV_KEY)  === 'true'
   const [viewMode, setViewMode] = useState<'table' | 'shopify' | 'csv'>('table')
 
+  // Load job metadata once on mount
   useEffect(() => {
     if (!jobId) return
     setLoading(true)
-    Promise.all([
-      migrationApi.getJob(jobId),
-      // Backend max is 500 per request — fetch two pages to get ~1000 rows
-      Promise.all([
-        migrationApi.getRows(jobId, { skip: 0,   limit: 500 }),
-        migrationApi.getRows(jobId, { skip: 500, limit: 500 }),
-      ]).then(([p1, p2]) => [...p1, ...p2]),
-    ])
-      .then(([j, fetchedRows]) => {
-        setJob(j)
-        setRawRows(fetchedRows)
-
-        let gridRows = rowsToGridRows(fetchedRows)
-
-        // Fallback: if migration_rows is empty, use raw_records from the job doc
-        if (gridRows.length === 0) {
-          const jobRaw = j as unknown as Record<string, unknown>
-          const rawRecords = Array.isArray(jobRaw.raw_records)
-            ? (jobRaw.raw_records as Record<string, unknown>[])
-            : []
-          gridRows = rawRecordsToGridRows(rawRecords)
-        }
-
-        setRows(gridRows)
-      })
+    migrationApi.getJob(jobId)
+      .then(setJob)
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [jobId])
+
+  // Re-fetch rows from API whenever the filter tab changes
+  useEffect(() => {
+    if (!jobId) return
+    setRowsLoading(true)
+    const status = filterTab === 'all' ? undefined : filterTab
+    Promise.all([
+      migrationApi.getRows(jobId, { status, skip: 0,   limit: 500 }),
+      migrationApi.getRows(jobId, { status, skip: 500, limit: 500 }),
+    ])
+      .then(([p1, p2]) => {
+        const fetchedRows = [...p1, ...p2]
+        setRawRows(fetchedRows)
+        let gridRows = rowsToGridRows(fetchedRows)
+        // Fallback only on 'all' tab: use raw_records from job doc if API returned nothing
+        if (gridRows.length === 0 && filterTab === 'all') {
+          setJob((prev) => {
+            if (!prev) return prev
+            const jobRaw = prev as unknown as Record<string, unknown>
+            const rawRecords = Array.isArray(jobRaw.raw_records)
+              ? (jobRaw.raw_records as Record<string, unknown>[])
+              : []
+            gridRows = rawRecordsToGridRows(rawRecords)
+            return prev
+          })
+        }
+        setRows(gridRows)
+      })
+      .catch(console.error)
+      .finally(() => setRowsLoading(false))
+  }, [jobId, filterTab])
 
   // Debounce search — filter only fires 150ms after the user stops typing
   useEffect(() => {
@@ -488,11 +498,9 @@ export default function ResultsGrid() {
     })
   }
 
-  // Filter rows by tab + search, then apply column visibility
+  // Apply search + column visibility (tab filtering is now handled by the API)
   const filteredRows = useMemo(() => {
     let base = rows
-    if (filterTab === 'correct') base = base.filter((r) => r.status === 'correct')
-    if (filterTab === 'failed')  base = base.filter((r) => r.status === 'failed')
 
     if (debouncedSearch.trim()) {
       const q = debouncedSearch.trim().toLowerCase()
@@ -512,8 +520,8 @@ export default function ResultsGrid() {
     }))
   }, [filterTab, debouncedSearch, hiddenCols, rows])
 
-  const correctCount = rows.filter((r) => r.status === 'correct').length
-  const failedCount = rows.filter((r) => r.status === 'failed').length
+  const correctCount = job?.correctRows ?? 0
+  const failedCount  = job?.failedRows  ?? 0
 
   const pageTitle = job?.name || 'Migration Results'
 
@@ -644,7 +652,7 @@ export default function ResultsGrid() {
       >
         <div className="flex items-center gap-1.5 text-xs text-slate-500">
           <Hash className="w-3.5 h-3.5 text-slate-400" />
-          <span className="font-semibold text-slate-800 dark:text-slate-200">{rows.length}</span>
+          <span className="font-semibold text-slate-800 dark:text-slate-200">{job?.totalRows ?? rows.length}</span>
           <span className="dark:text-slate-400">total rows</span>
         </div>
         <span className="text-slate-200 dark:text-slate-700">|</span>
@@ -682,9 +690,9 @@ export default function ResultsGrid() {
         <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-800 rounded-full p-0.5">
           {(
             [
-              { key: 'all', label: 'All', count: rows.length },
-              { key: 'correct', label: 'Correct ', count: correctCount },
-              { key: 'failed', label: 'Failed ', count: failedCount },
+              { key: 'all',     label: 'All',     count: job?.totalRows  ?? rows.length },
+              { key: 'correct', label: 'Correct', count: correctCount },
+              { key: 'failed',  label: 'Failed',  count: failedCount },
             ] as { key: FilterTab; label: string; count: number }[]
           ).map(({ key, label, count }) => (
             <button
@@ -788,7 +796,12 @@ export default function ResultsGrid() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
       >
-        {filteredRows.length === 0 ? (
+        {rowsLoading ? (
+          <div className="flex-1 flex flex-col items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 gap-3">
+            <span className="w-7 h-7 rounded-full border-2 border-slate-300 dark:border-slate-600 border-t-slate-700 dark:border-t-slate-300 animate-spin" />
+            <p className="text-xs text-slate-400 dark:text-slate-500">Loading rows…</p>
+          </div>
+        ) : filteredRows.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center gap-3">
             <Search className="w-8 h-8 text-slate-300 dark:text-slate-600" />
             <div>
