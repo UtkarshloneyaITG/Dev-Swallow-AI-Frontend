@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { usePageAnimation } from '../hooks/usePageAnimation'
@@ -10,12 +10,14 @@ import type { MigrationJob, StoredCrawlSession } from '../types'
 import { PageLoader } from '../components/ui/Spinner'
 import {
   DASH_CHART_TYPE, DASH_CHART_PALETTE, DASH_CARD_STYLE,
-  DASH_SHOW_METRICS, DASH_SHOW_CHART, DASH_SHOW_HEALTH,
-  DASH_SHOW_CRAWL, DASH_COMPACT_TABLE,
+  DASH_SHOW_METRICS, DASH_SHOW_CHART,
+  DASH_COMPACT_TABLE,
 } from './Settings'
 import DonutChart from '../components/charts/DonutChart'
 import RingChart from '../components/charts/RingChart'
 import BarsChart from '../components/charts/BarsChart'
+import ActivityAreaChart from '../components/charts/ActivityAreaChart'
+import type { ActivityPoint } from '../components/charts/ActivityAreaChart'
 import type { DonutSlice } from '../components/charts/DonutChart'
 
 // ── Palette map ───────────────────────────────────────────────────────────
@@ -54,21 +56,6 @@ function getGreeting() {
   return 'Good evening'
 }
 
-// ── Mini bar (for success rate) ────────────────────────────────────────────
-function MiniBar({ value, color }: { value: number; color: string }) {
-  return (
-    <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden w-full">
-      <motion.div
-        className="h-full rounded-full"
-        style={{ backgroundColor: color }}
-        initial={{ width: 0 }}
-        animate={{ width: `${value}%` }}
-        transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1], delay: 0.3 }}
-      />
-    </div>
-  )
-}
-
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -81,8 +68,6 @@ export default function Dashboard() {
   const cardStyle    = localStorage.getItem(DASH_CARD_STYLE)    || 'filled'
   const showMetrics  = localStorage.getItem(DASH_SHOW_METRICS)  !== 'false'
   const showChart    = localStorage.getItem(DASH_SHOW_CHART)    !== 'false'
-  const showHealth   = localStorage.getItem(DASH_SHOW_HEALTH)   !== 'false'
-  const showCrawl    = localStorage.getItem(DASH_SHOW_CRAWL)    !== 'false'
   const compactTable = localStorage.getItem(DASH_COMPACT_TABLE) === 'true'
   const palette      = PALETTES[chartPalette] ?? PALETTES.default
 
@@ -116,35 +101,67 @@ export default function Dashboard() {
   }, [user])
 
 
-  if (loading) return <PageLoader label="Loading dashboard…" />
+  // ── Derived stats (memoized) ───────────────────────────────────────────
+  const { totalJobs, completedJobs, processingJobs, pendingJobs, failedJobs,
+          totalCorrect, totalFailed, totalRows, successRate, totalProducts, activeCrawls } =
+    useMemo(() => {
+      const totalJobs       = jobs.length
+      const completedJobs   = jobs.filter(j => j.status === 'completed').length
+      const processingJobs  = jobs.filter(j => j.status === 'processing').length
+      const pendingJobs     = jobs.filter(j => j.status === 'pending').length
+      const failedJobs      = jobs.filter(j => j.status === 'failed').length
+      const totalCorrect    = jobs.reduce((a, j) => a + j.correctRows, 0)
+      const totalFailed     = jobs.reduce((a, j) => a + j.failedRows, 0)
+      const totalRows       = jobs.reduce((a, j) => a + j.totalRows, 0)
+      const successRate     = totalRows > 0 ? Math.round((totalCorrect / totalRows) * 100) : 0
+      const totalProducts   = crawls.reduce((a, c) => a + c.productsScraped, 0)
+      const activeCrawls    = crawls.filter(c => c.status === 'crawling').length
+      return { totalJobs, completedJobs, processingJobs, pendingJobs, failedJobs,
+               totalCorrect, totalFailed, totalRows, successRate, totalProducts, activeCrawls }
+    }, [jobs, crawls])
 
-  // ── Derived stats ──────────────────────────────────────────────────────
-  const totalJobs       = jobs.length
-  const completedJobs   = jobs.filter(j => j.status === 'completed').length
-  const processingJobs  = jobs.filter(j => j.status === 'processing').length
-  const pendingJobs     = jobs.filter(j => j.status === 'pending').length
-  const failedJobs      = jobs.filter(j => j.status === 'failed').length
-  const totalCorrect    = jobs.reduce((a, j) => a + j.correctRows, 0)
-  const totalFailed     = jobs.reduce((a, j) => a + j.failedRows, 0)
-  const totalRows       = jobs.reduce((a, j) => a + j.totalRows, 0)
-  const successRate     = totalRows > 0 ? Math.round((totalCorrect / totalRows) * 100) : 0
-  const totalProducts   = crawls.reduce((a, c) => a + c.productsScraped, 0)
-  const activeCrawls    = crawls.filter(c => c.status === 'crawling').length
-
-  const donutSlices: DonutSlice[] = [
+  const donutSlices: DonutSlice[] = useMemo(() => [
     { value: completedJobs,  ...palette[0], label: 'Completed' },
     { value: processingJobs, ...palette[1], label: 'Processing' },
     { value: pendingJobs,    ...palette[2], label: 'Pending' },
     { value: failedJobs,     ...palette[3], label: 'Failed' },
-  ]
+  ], [completedJobs, processingJobs, pendingJobs, failedJobs, palette])
 
-  // Recent 5 of each
-  const recentJobs   = [...jobs].slice(0, 5)
-  const recentCrawls = [...crawls].slice(0, 5)
-  const recentAll    = [
+  // ── Activity area chart data (last 14 days, memoized) ────────────────
+  const activityData: ActivityPoint[] = useMemo(() => {
+    const days = 14
+    const now = new Date()
+    const buckets: Record<string, { migrations: number; crawls: number }> = {}
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now)
+      d.setDate(d.getDate() - i)
+      const key = d.toISOString().slice(0, 10)
+      buckets[key] = { migrations: 0, crawls: 0 }
+    }
+    for (const j of jobs) {
+      const key = new Date(j.createdAt).toISOString().slice(0, 10)
+      if (buckets[key]) buckets[key].migrations++
+    }
+    for (const c of crawls) {
+      const key = new Date(c.startedAt).toISOString().slice(0, 10)
+      if (buckets[key]) buckets[key].crawls++
+    }
+    return Object.entries(buckets).map(([key, v]) => {
+      const d = new Date(key + 'T00:00:00')
+      return { date: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), ...v }
+    })
+  }, [jobs, crawls])
+
+  // Recent activity (memoized)
+  const recentJobs   = useMemo(() => [...jobs].slice(0, 5), [jobs])
+  const recentCrawls = useMemo(() => [...crawls].slice(0, 5), [crawls])
+  const recentAll = useMemo(() => [
     ...jobs.map(j => ({ type: 'migration' as const, key: j.id, name: j.name, status: j.status, date: j.createdAt, meta: `${j.totalRows} rows` })),
     ...crawls.map(c => ({ type: 'crawl' as const, key: c.jobId || c.url, name: c.url.replace(/^https?:\/\//, ''), status: c.status, date: c.startedAt, meta: `${c.productsScraped} products` })),
-  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8)
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8), [jobs, crawls])
+
+  // ── Loading guard (must be after all hooks) ───────────────────────────
+  if (loading) return <PageLoader label="Loading dashboard…" />
 
   const statusBadge: Record<string, string> = {
     completed:  'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400',
@@ -258,16 +275,40 @@ export default function Dashboard() {
           ))}
         </div>}
 
-        {/* ── Middle section ─────────────────────────────────────────────── */}
-        {(showChart || showHealth || showCrawl) && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+        {/* ── Middle section: Area chart (left) + Donut chart (right) ──── */}
+        {showChart && (
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-6">
 
-          {/* Chart panel */}
-          {showChart && (
+          {/* Activity area chart — left, wider */}
           <motion.div
-            className="themed-card rounded-2xl p-5 flex flex-col items-center gap-4"
+            className="lg:col-span-3 themed-card rounded-2xl p-5"
             initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.2 }}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Activity Overview</h3>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Migrations & crawls — last 14 days</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-violet-500" />
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">Migrations</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-sky-500" />
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">Crawls</span>
+                </div>
+              </div>
+            </div>
+            <ActivityAreaChart data={activityData} />
+          </motion.div>
+
+          {/* Donut / Ring / Bars chart — right */}
+          <motion.div
+            className="lg:col-span-2 themed-card rounded-2xl p-5 flex flex-col items-center gap-4"
+            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: 0.25 }}
           >
             <div className="w-full flex items-center justify-between mb-1">
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Job Status</h3>
@@ -277,65 +318,7 @@ export default function Dashboard() {
             {chartType === 'ring'  && <RingChart  slices={donutSlices} total={totalJobs} />}
             {chartType === 'bars'  && <BarsChart  slices={donutSlices} total={totalJobs} />}
           </motion.div>
-          )}
 
-          {/* Migration health bars */}
-          {showHealth && (
-          <motion.div
-            className="themed-card rounded-2xl p-5 space-y-4"
-            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.25 }}
-          >
-            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Migration Health</h3>
-            {[
-              { label: 'Success rate',   value: successRate,                                        color: '#22c55e', display: `${successRate}%` },
-              { label: 'Completed jobs', value: totalJobs > 0 ? Math.round(completedJobs / totalJobs * 100) : 0, color: '#8b5cf6', display: `${completedJobs} / ${totalJobs}` },
-              { label: 'Rows correct',   value: totalRows > 0 ? Math.round(totalCorrect / totalRows * 100) : 0,   color: '#0ea5e9', display: `${totalCorrect.toLocaleString()}` },
-              { label: 'Failed rows',    value: totalRows > 0 ? Math.round(totalFailed / totalRows * 100) : 0,    color: '#f43f5e', display: `${totalFailed.toLocaleString()}` },
-            ].map(b => (
-              <div key={b.label}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs text-slate-500 dark:text-slate-400">{b.label}</span>
-                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 tabular-nums">{b.display}</span>
-                </div>
-                <MiniBar value={b.value} color={b.color} />
-              </div>
-            ))}
-          </motion.div>
-          )}
-
-          {/* Crawl summary */}
-          {showCrawl && (
-          <motion.div
-            className="themed-card rounded-2xl p-5"
-            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.3 }}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Crawl Summary</h3>
-              <Globe className="w-4 h-4 text-slate-400" />
-            </div>
-            <div className="space-y-3">
-              {[
-                { label: 'Total crawls',    value: crawls.length,                                         color: 'text-sky-600 dark:text-sky-400' },
-                { label: 'Products found',  value: totalProducts.toLocaleString(),                         color: 'text-violet-600 dark:text-violet-400' },
-                { label: 'Completed',       value: crawls.filter(c => c.status === 'completed').length,    color: 'text-emerald-600 dark:text-emerald-400' },
-                { label: 'Active crawls',   value: activeCrawls,                                           color: 'text-amber-600 dark:text-amber-400' },
-              ].map(r => (
-                <div key={r.label} className="flex items-center justify-between py-2 border-b border-black/[0.04] dark:border-white/[0.04] last:border-0">
-                  <span className="text-xs text-slate-500 dark:text-slate-400">{r.label}</span>
-                  <span className={`text-sm font-bold tabular-nums ${r.color}`}>{r.value}</span>
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={() => navigate('/jobs')}
-              className="w-full mt-4 flex items-center justify-center gap-1.5 text-xs font-medium text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-            >
-              View all jobs <ArrowRight className="w-3 h-3" />
-            </button>
-          </motion.div>
-          )}
         </div>
         )}
       </div>

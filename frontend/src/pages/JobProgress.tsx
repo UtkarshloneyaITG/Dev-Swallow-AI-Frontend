@@ -26,7 +26,6 @@ import { migrationApi, getAccessToken } from '../services/api'
 import WalkingPets from '../components/ui/WalkingPets'
 
 const SOCKET_URL = (import.meta.env.VITE_API_BASE_URL as string) ?? ''
-console.log(SOCKET_URL, "soket /////////////////")
 
 /** Merge a raw socket payload into the current job state.
  *  Handles both flat  { processed_rows: 5 }
@@ -126,14 +125,14 @@ export default function JobProgress() {
       }
 
       socket.on('connect', () => {
-        console.log('[Socket] connected, id:', socket.id)
+        if (import.meta.env.DEV) console.log('[Socket] connected, id:', socket.id)
         setSocketStatus('connected')
         stopPoll()
         joinRoom()
       })
 
       const handleUpdate = (eventName: string, raw: Record<string, unknown>) => {
-        console.log(`[Socket] event="${eventName}"`, 'raw data in soket' , raw)
+        if (import.meta.env.DEV) console.log(`[Socket] event="${eventName}"`, raw)
         const incoming = (raw.job_id ?? raw.jobId ?? raw.id) as string | undefined
         if (incoming && incoming !== jobId) return
         setJob((prev) => prev ? applyUpdate(prev, raw) : prev)
@@ -152,18 +151,18 @@ export default function JobProgress() {
       socket.on('job_error',       makeHandler('job_error'))
 
       socket.on('connect_error', (err) => {
-        console.log('[Socket] connect_error', err.message)
+        if (import.meta.env.DEV) console.log('[Socket] connect_error', err.message)
         setSocketStatus('disconnected')
         startFallbackPoll(jobId)
       })
       socket.on('disconnect', (reason) => {
-        console.log('[Socket] disconnected, reason:', reason)
+        if (import.meta.env.DEV) console.log('[Socket] disconnected, reason:', reason)
         setSocketStatus('disconnected')
         startFallbackPoll(jobId)
       })
       // Socket.IO v4 — reconnect is a Manager event
       socket.io.on('reconnect', (attempt) => {
-        console.log('[Socket] reconnected after', attempt, 'attempt(s)')
+        if (import.meta.env.DEV) console.log('[Socket] reconnected after', attempt, 'attempt(s)')
         setSocketStatus('connected')
         stopPoll()
         joinRoom()
@@ -193,10 +192,10 @@ export default function JobProgress() {
               clearInterval(pendingPoll!)
               pendingPoll = null
             }
-          }).catch(() => {})
+          }).catch((err) => { if (import.meta.env.DEV) console.error('Pending poll error:', err) })
         }, 3000)
       }
-    }).catch((err) => { console.error(err); setLoading(false) })
+    }).catch((err) => { if (import.meta.env.DEV) console.error('Failed to load job:', err); setLoading(false) })
 
     return () => {
       if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
@@ -204,8 +203,7 @@ export default function JobProgress() {
       socketRef.current = null
       stopPoll()
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId])
+  }, [jobId, stopPoll, startFallbackPoll])
 
   // Disconnect once job reaches a terminal state
   useEffect(() => {

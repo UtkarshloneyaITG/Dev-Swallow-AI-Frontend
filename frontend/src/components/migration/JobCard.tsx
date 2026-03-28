@@ -45,7 +45,7 @@ function formatRelativeTime(dateStr: string): string {
   return `${diffDays}d ago`
 }
 
-export default function JobCard({ job, index = 0, onDelete }: JobCardProps) {
+export default function JobCard({ job, index: _index = 0, onDelete }: JobCardProps) {
   const navigate = useNavigate()
   const TypeIcon = typeIconMap[job.type]
   const typeColor = typeColorMap[job.type]

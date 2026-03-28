@@ -433,6 +433,7 @@ export interface CrawlStatusResponse {
   products_scraped?:     number
   products_count?:       number
   total_input_products?: number
+  max_products?:         number
   elapsed_seconds:       number
   current_url?:          string
   url?:                  string
@@ -491,17 +492,16 @@ export const crawlApi = {
    * Poll GET /crawl/status for live progress.
    */
   async start(
-    url: string,
-    params: { name?: string; user_id?: string; max_products?: number; max_pages?: number; max_depth?: number }
+    params: { url: string; user_id: string; name: string; max_products: number }
   ): Promise<{ status: string; job_id?: string; message?: string }> {
-    const body: Record<string, unknown> = { url, user_id: params.user_id ?? 'default' }
-    if (params.name)                        body.name         = params.name
-    if (params.max_products != null)        body.max_products = params.max_products
-    if (params.max_pages    != null)        body.max_pages    = params.max_pages
-    if (params.max_depth    != null)        body.max_depth    = params.max_depth
     return crawlRequest('/crawl', {
       method: 'POST',
-      body:   JSON.stringify(body),
+      body:   JSON.stringify({
+        url:          params.url,
+        user_id:      params.user_id,
+        name:         params.name,
+        max_products: params.max_products,
+      }),
     })
   },
 

@@ -1,25 +1,29 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { useAuth } from './context/AuthContext'
 import { PageLoader } from './components/ui/Spinner'
+import ErrorBoundary from './components/ui/ErrorBoundary'
 
 // Layout
 import DashboardLayout from './components/layout/DashboardLayout'
 
-// Pages
+// Pages — lightweight (eager load)
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
-import NewMigration from './pages/NewMigration'
 import Jobs from './pages/Jobs'
-import JobProgress from './pages/JobProgress'
-import FailedRows from './pages/FailedRows'
-import Export from './pages/Export'
-import Settings from './pages/Settings'
-import ResultsGrid from './pages/ResultsGrid'
-import BatchExport from './pages/BatchExport'
-import MergedJobView from './pages/MergedJobView'
-import CrawlDetail from './pages/CrawlDetail'
+
+// Pages — heavy (lazy load to reduce initial bundle)
+const NewMigration = lazy(() => import('./pages/NewMigration'))
+const JobProgress  = lazy(() => import('./pages/JobProgress'))
+const FailedRows   = lazy(() => import('./pages/FailedRows'))
+const Export       = lazy(() => import('./pages/Export'))
+const Settings     = lazy(() => import('./pages/Settings'))
+const ResultsGrid  = lazy(() => import('./pages/ResultsGrid'))
+const BatchExport  = lazy(() => import('./pages/BatchExport'))
+const MergedJobView = lazy(() => import('./pages/MergedJobView'))
+const CrawlDetail  = lazy(() => import('./pages/CrawlDetail'))
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
@@ -30,31 +34,33 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <AnimatePresence mode="wait">
-      <Routes>
-        {/* Public routes */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+    <ErrorBoundary>
+      <AnimatePresence mode="wait">
+        <Routes>
+          {/* Public routes */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
 
-        {/* Authenticated routes with sidebar layout */}
-        <Route element={<RequireAuth><DashboardLayout /></RequireAuth>}>
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/new-migration" element={<NewMigration />} />
-          <Route path="/jobs" element={<Jobs />} />
-          <Route path="/jobs/:jobId" element={<JobProgress />} />
-          <Route path="/jobs/:jobId/failed" element={<FailedRows />} />
-          <Route path="/jobs/:jobId/export" element={<Export />} />
-          <Route path="/jobs/:jobId/results" element={<ResultsGrid />} />
-          <Route path="/batch-export" element={<BatchExport />} />
-          <Route path="/merged/:mergedId" element={<MergedJobView />} />
-          <Route path="/crawls/:jobId" element={<CrawlDetail />} />
-          <Route path="/settings" element={<Settings />} />
-        </Route>
+          {/* Authenticated routes with sidebar layout */}
+          <Route element={<RequireAuth><DashboardLayout /></RequireAuth>}>
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/new-migration" element={<Suspense fallback={<PageLoader />}><NewMigration /></Suspense>} />
+            <Route path="/jobs" element={<Jobs />} />
+            <Route path="/jobs/:jobId" element={<Suspense fallback={<PageLoader />}><JobProgress /></Suspense>} />
+            <Route path="/jobs/:jobId/failed" element={<Suspense fallback={<PageLoader />}><FailedRows /></Suspense>} />
+            <Route path="/jobs/:jobId/export" element={<Suspense fallback={<PageLoader />}><Export /></Suspense>} />
+            <Route path="/jobs/:jobId/results" element={<Suspense fallback={<PageLoader />}><ResultsGrid /></Suspense>} />
+            <Route path="/batch-export" element={<Suspense fallback={<PageLoader />}><BatchExport /></Suspense>} />
+            <Route path="/merged/:mergedId" element={<Suspense fallback={<PageLoader />}><MergedJobView /></Suspense>} />
+            <Route path="/crawls/:jobId" element={<Suspense fallback={<PageLoader />}><CrawlDetail /></Suspense>} />
+            <Route path="/settings" element={<Suspense fallback={<PageLoader />}><Settings /></Suspense>} />
+          </Route>
 
-        {/* Default redirect */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
-    </AnimatePresence>
+          {/* Default redirect */}
+          <Route path="/" element={<Navigate to="/login" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </AnimatePresence>
+    </ErrorBoundary>
   )
 }

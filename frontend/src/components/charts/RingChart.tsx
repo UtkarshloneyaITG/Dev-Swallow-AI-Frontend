@@ -1,7 +1,7 @@
+import { useState, useRef } from 'react'
 import {
   PieChart,
   Pie,
-  Tooltip,
   ResponsiveContainer,
 } from 'recharts'
 import type { DonutSlice } from './DonutChart'
@@ -11,26 +11,11 @@ interface Props {
   total: number
 }
 
-function CustomTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean
-  payload?: { name: string; value: number; payload: DonutSlice & { fill: string } }[]
-}) {
-  if (!active || !payload?.length) return null
-  const d = payload[0]
-  return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg px-3 py-2">
-      <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">{d.name}</p>
-      <p className="text-base font-bold tabular-nums mt-0.5" style={{ color: d.payload.fill }}>
-        {d.value}
-      </p>
-    </div>
-  )
-}
-
 export default function RingChart({ slices, total }: Props) {
+  const [activeIdx, setActiveIdx] = useState<number | null>(null)
+  const [mouse, setMouse] = useState({ x: 0, y: 0 })
+  const containerRef = useRef<HTMLDivElement>(null)
+
   const data = slices.map((s) => ({
     name:  s.label,
     value: s.value || 0,
@@ -40,9 +25,22 @@ export default function RingChart({ slices, total }: Props) {
     label: s.label,
   }))
 
+  const activeSlice = activeIdx !== null ? slices[activeIdx] : null
+
+  function handleMouseMove(e: React.MouseEvent) {
+    if (!containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    setMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+  }
+
   return (
     <div className="relative w-full flex flex-col items-center">
-      <div className="relative w-[200px] h-[200px]">
+      <div
+        ref={containerRef}
+        className="relative w-[200px] h-[200px]"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setActiveIdx(null)}
+      >
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -59,9 +57,10 @@ export default function RingChart({ slices, total }: Props) {
               animationBegin={0}
               animationDuration={700}
               animationEasing="ease-out"
-              style={{ outline: 'none' }}
+              style={{ cursor: 'pointer', outline: 'none' }}
+              onMouseEnter={(_, idx) => setActiveIdx(idx)}
+              onMouseLeave={() => setActiveIdx(null)}
             />
-            <Tooltip content={<CustomTooltip />} />
           </PieChart>
         </ResponsiveContainer>
 
@@ -74,6 +73,22 @@ export default function RingChart({ slices, total }: Props) {
             Jobs
           </span>
         </div>
+
+        {/* Custom tooltip — follows cursor relative to chart container */}
+        {activeSlice && (
+          <div
+            className="absolute z-50 pointer-events-none rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg px-3 py-2 transition-opacity duration-100"
+            style={{
+              left: mouse.x + 12,
+              top:  mouse.y - 40,
+            }}
+          >
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap">{activeSlice.label}</p>
+            <p className="text-base font-bold tabular-nums mt-0.5" style={{ color: activeSlice.color }}>
+              {activeSlice.value}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Legend */}

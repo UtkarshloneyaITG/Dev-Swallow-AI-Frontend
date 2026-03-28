@@ -16,8 +16,6 @@ export const DASH_CHART_PALETTE = 'swallow_dash_chart_palette' // default | vibr
 export const DASH_CARD_STYLE    = 'swallow_dash_card_style'    // filled | outlined | minimal
 export const DASH_SHOW_METRICS  = 'swallow_dash_show_metrics'
 export const DASH_SHOW_CHART    = 'swallow_dash_show_chart'
-export const DASH_SHOW_HEALTH   = 'swallow_dash_show_health'
-export const DASH_SHOW_CRAWL    = 'swallow_dash_show_crawl'
 export const DASH_COMPACT_TABLE = 'swallow_dash_compact_table'
 
 interface ToggleProps {
@@ -96,8 +94,6 @@ export default function Settings() {
   const [cardStyle,    setCardStyle]    = useState(() => localStorage.getItem(DASH_CARD_STYLE)    || 'filled')
   const [showMetrics,  setShowMetrics]  = useState(() => localStorage.getItem(DASH_SHOW_METRICS)  !== 'false')
   const [showChart,    setShowChart]    = useState(() => localStorage.getItem(DASH_SHOW_CHART)    !== 'false')
-  const [showHealth,   setShowHealth]   = useState(() => localStorage.getItem(DASH_SHOW_HEALTH)   !== 'false')
-  const [showCrawl,    setShowCrawl]    = useState(() => localStorage.getItem(DASH_SHOW_CRAWL)    !== 'false')
   const [compactTable, setCompactTable] = useState(() => localStorage.getItem(DASH_COMPACT_TABLE) === 'true')
 
   function saveDashSetting(key: string, value: string) {
@@ -419,14 +415,15 @@ export default function Settings() {
 
                 {/* ── Dashboard ── */}
                 {activeSection === 'dashboard' && (
-                  <div className="space-y-5">
+                  <div className="themed-card rounded-2xl p-4 sm:p-6 space-y-6">
+                    <div>
+                      <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-0.5">Dashboard</h2>
+                      <p className="text-xs text-slate-400 dark:text-slate-500">Customize your dashboard layout and charts.</p>
+                    </div>
 
                     {/* Chart Type */}
-                    <div className="themed-card rounded-2xl p-4 sm:p-6 space-y-4">
-                      <div>
-                        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Chart Type</h2>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Choose how the job status breakdown is displayed.</p>
-                      </div>
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-widest text-slate-400 mb-3">Chart Type</p>
                       <div className="grid grid-cols-3 gap-3">
                         {([
                           {
@@ -474,8 +471,8 @@ export default function Settings() {
                               onClick={() => { setChartType(id); saveDashSetting(DASH_CHART_TYPE, id) }}
                               className={`relative flex flex-col items-center gap-2.5 p-3 rounded-xl border-2 transition-all duration-150 ${
                                 active
-                                  ? 'border-[rgb(var(--accent,_0_0_0))] bg-black/[0.02] dark:bg-white/[0.03]'
-                                  : 'border-transparent bg-black/[0.02] dark:bg-white/[0.02] hover:border-slate-200 dark:hover:border-slate-700'
+                                  ? 'border-[rgb(var(--accent,_0_0_0))] dark:border-white/60 bg-black/[0.02] dark:bg-white/[0.03]'
+                                  : 'border-transparent bg-black/[0.02] dark:bg-white/[0.02] hover:border-slate-200 dark:hover:border-slate-600'
                               }`}
                             >
                               {preview}
@@ -492,11 +489,8 @@ export default function Settings() {
                     </div>
 
                     {/* Color Palette */}
-                    <div className="themed-card rounded-2xl p-4 sm:p-6 space-y-4">
-                      <div>
-                        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Chart Palette</h2>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Color scheme used across all dashboard charts.</p>
-                      </div>
+                    <div className="border-t border-black/5 dark:border-white/5 pt-5">
+                      <p className="text-xs font-medium uppercase tracking-widest text-slate-400 mb-3">Chart Palette</p>
                       <div className="grid grid-cols-2 gap-3">
                         {([
                           { id: 'default',  label: 'Default',  colors: ['#22c55e', '#f59e0b', '#94a3b8', '#f43f5e'] },
@@ -511,8 +505,8 @@ export default function Settings() {
                               onClick={() => { setChartPalette(id); saveDashSetting(DASH_CHART_PALETTE, id) }}
                               className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all duration-150 ${
                                 active
-                                  ? 'border-[rgb(var(--accent,_0_0_0))]'
-                                  : 'border-transparent bg-black/[0.02] dark:bg-white/[0.02] hover:border-slate-200 dark:hover:border-slate-700'
+                                  ? 'border-[rgb(var(--accent,_0_0_0))] dark:border-white/60'
+                                  : 'border-transparent bg-black/[0.02] dark:bg-white/[0.02] hover:border-slate-200 dark:hover:border-slate-600'
                               }`}
                             >
                               <div className="flex gap-1 flex-shrink-0">
@@ -529,11 +523,8 @@ export default function Settings() {
                     </div>
 
                     {/* Card Style */}
-                    <div className="themed-card rounded-2xl p-4 sm:p-6 space-y-4">
-                      <div>
-                        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Metric Card Style</h2>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">How the hero metric cards look on the dashboard.</p>
-                      </div>
+                    <div className="border-t border-black/5 dark:border-white/5 pt-5">
+                      <p className="text-xs font-medium uppercase tracking-widest text-slate-400 mb-3">Metric Card Style</p>
                       <div className="grid grid-cols-3 gap-3">
                         {([
                           {
@@ -556,8 +547,8 @@ export default function Settings() {
                               onClick={() => { setCardStyle(id); saveDashSetting(DASH_CARD_STYLE, id) }}
                               className={`relative flex flex-col gap-2 p-2.5 rounded-xl border-2 transition-all duration-150 ${
                                 active
-                                  ? 'border-[rgb(var(--accent,_0_0_0))]'
-                                  : 'border-transparent bg-black/[0.02] dark:bg-white/[0.02] hover:border-slate-200 dark:hover:border-slate-700'
+                                  ? 'border-[rgb(var(--accent,_0_0_0))] dark:border-white/60'
+                                  : 'border-transparent bg-black/[0.02] dark:bg-white/[0.02] hover:border-slate-200 dark:hover:border-slate-600'
                               }`}
                             >
                               {preview}
@@ -574,15 +565,13 @@ export default function Settings() {
                     </div>
 
                     {/* Visible sections */}
-                    <div className="themed-card rounded-2xl p-4 sm:p-6">
-                      <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-1">Visible Sections</h2>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 mb-5">Show or hide individual blocks on your dashboard.</p>
+                    <div className="border-t border-black/5 dark:border-white/5 pt-5">
+                      <p className="text-xs font-medium uppercase tracking-widest text-slate-400 mb-1">Visible Sections</p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500 mb-3">Show or hide individual blocks on your dashboard.</p>
                       {([
-                        { label: 'Hero Metrics',    desc: 'Products scraped, rows migrated, success rate, active jobs', val: showMetrics,  set: setShowMetrics,  key: DASH_SHOW_METRICS },
-                        { label: 'Job Status Chart', desc: 'Donut / ring / bar chart showing job breakdown',            val: showChart,    set: setShowChart,    key: DASH_SHOW_CHART },
-                        { label: 'Migration Health', desc: 'Animated progress bars for success rate and row stats',     val: showHealth,   set: setShowHealth,   key: DASH_SHOW_HEALTH },
-                        { label: 'Crawl Summary',   desc: 'Quick stats panel for your crawl sessions',                  val: showCrawl,    set: setShowCrawl,    key: DASH_SHOW_CRAWL },
-                        { label: 'Compact Table',   desc: 'Use tighter row height in the recent activity table',        val: compactTable, set: setCompactTable, key: DASH_COMPACT_TABLE },
+                        { label: 'Hero Metrics',  desc: 'Products scraped, rows migrated, success rate, active jobs',          val: showMetrics,  set: setShowMetrics,  key: DASH_SHOW_METRICS },
+                        { label: 'Charts Panel',  desc: 'Activity area chart and donut / ring / bar job status chart',         val: showChart,    set: setShowChart,    key: DASH_SHOW_CHART },
+                        { label: 'Compact Table', desc: 'Use tighter row height in the recent activity table',                 val: compactTable, set: setCompactTable, key: DASH_COMPACT_TABLE },
                       ]).map(({ label, desc, val, set, key }) => (
                         <div key={key} className="flex items-start justify-between gap-4 py-3.5 border-b border-black/5 dark:border-white/5 last:border-0">
                           <div className="min-w-0">
@@ -595,11 +584,11 @@ export default function Settings() {
                             aria-checked={val}
                             onClick={() => { const next = !val; set(next); saveDashSetting(key, String(next)) }}
                             className={`relative flex-shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none ${
-                              val ? 'bg-[rgb(var(--accent,_0_0_0))]' : 'bg-slate-200 dark:bg-slate-700'
+                              val ? 'bg-[rgb(var(--accent,_0_0_0))] dark:bg-emerald-500' : 'bg-slate-200 dark:bg-slate-700'
                             }`}
                           >
                             <motion.span
-                              className="inline-block h-4 w-4 rounded-full bg-white shadow-sm"
+                              className="inline-block h-4 w-4 rounded-full bg-white dark:bg-slate-100 shadow-sm"
                               animate={{ x: val ? 24 : 4 }}
                               transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                             />

@@ -121,7 +121,7 @@ export default function CrawlDetail() {
         setTotalPages(d.total_pages)
         setTotalProducts(d.total_products)
       })
-      .catch(() => {})
+      .catch((err) => { if (import.meta.env.DEV) console.error('Failed to load products:', err) })
       .finally(() => setProdLoading(false))
   }, [jobId, page])
 
@@ -438,7 +438,7 @@ export default function CrawlDetail() {
 
                     return (
                       <motion.div
-                        key={p.idx ?? i}
+                        key={`${page}-${i}`}
                         className="flex items-center gap-4 px-5 py-3.5 border-b border-black/[0.04] dark:border-white/[0.04] last:border-0 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}

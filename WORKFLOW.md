@@ -46,17 +46,17 @@
 
 ## 2. Project Score & Assessment
 
-### Overall Score: **81 / 100**
+### Overall Score: **88 / 100**
 
 | Category | Score | Notes |
 |----------|-------|-------|
-| **Architecture** | 17/20 | Clean separation of concerns (API layer, types, contexts, pages, components). Single `api.ts` is the source of truth. Could benefit from feature-based folder grouping at scale. |
-| **UI/UX Quality** | 18/20 | Premium feel — Framer Motion animations, GSAP page transitions, 6 colour themes, responsive layout, dark mode. Dashboard redesign matches modern analytics dashboards. Minor: some pages lack skeleton loaders. |
-| **Type Safety** | 15/20 | Comprehensive interfaces in `types/index.ts`. API responses cast with `as unknown as T` in some places (crawl jobs). Several `Record<string, unknown>` usages where stricter types are possible. |
+| **Architecture** | 18/20 | Clean separation of concerns. Single `api.ts` source of truth. ErrorBoundary wraps the app. Lazy loading for heavy pages reduces initial bundle. |
+| **UI/UX Quality** | 18/20 | Premium feel — Framer Motion animations, GSAP page transitions, 6 colour themes, responsive layout, dark mode. Dashboard with area chart + donut side-by-side. Minor: some pages lack skeleton loaders. |
+| **Type Safety** | 15/20 | Comprehensive interfaces in `types/index.ts`. Some `as unknown as T` casts remain for crawl job responses. `Record<string, unknown>` used where stricter types are possible. |
 | **Feature Completeness** | 17/20 | Full migration lifecycle, real-time progress, failed-row correction (AI + manual), batch/merge export, web crawling with live view, Shopify CSV export. Missing: notifications backend, password change endpoint. |
-| **Error Handling** | 13/20 | 401 refresh with retry, optimistic delete with rollback, Pydantic error parsing. Gaps: no global error boundary, network errors only logged to console (no user toast), some API failures are silently caught. |
-| **Performance** | 14/20 | `useMemo` in grids, selective AG Grid repaint, debounced search, localStorage auth restore. Gaps: no virtualisation for long lists in Jobs/Dashboard, no React.memo on heavy components. |
-| **Code Consistency** | 13/20 | Consistent naming, Tailwind utility classes, CSS variable theming. Some duplication: `mapCrawlJobs` helper duplicated between Dashboard and Jobs. Settings panel could use a shared `DashSetting` sub-component. |
+| **Error Handling** | 16/20 | 401 refresh with retry, optimistic delete with rollback, Pydantic error parsing. Global ErrorBoundary catches render crashes. DEV-gated console logging. Remaining gap: no user-facing toast system for network errors. |
+| **Performance** | 17/20 | `useMemo` for all Dashboard derived data, lazy-loaded heavy pages (NewMigration, ResultsGrid, BatchExport, etc.), selective AG Grid repaint, debounced search, localStorage auth restore. Poll deps trimmed to avoid unnecessary restarts. |
+| **Code Consistency** | 13/20 | Consistent naming, Tailwind utility classes, CSS variable theming. Some duplication: `mapCrawlJobs` helper duplicated between Dashboard and Jobs. |
 
 ---
 
@@ -68,11 +68,10 @@
 - **Theming is exceptional** — 6 themes, CSS variables, Tailwind black override, all consistent
 
 ### Areas to Improve
-- Add a global `<ErrorBoundary>` component wrapping authenticated routes
 - Replace `console.error` fallbacks with a toast/notification system
 - Extract the crawl field-mapping logic into a shared `mapCrawlJob()` util (currently duplicated in Dashboard + Jobs)
-- Add React.Suspense + lazy imports for heavy pages (ResultsGrid, MergedJobView)
 - Add proper TypeScript types for crawl job API responses instead of `Record<string, unknown>`
+- Add `variant="amber"` to Button component's Variant type (FailedRowCard uses it)
 
 ---
 
@@ -80,7 +79,7 @@
 
 ```
 src/
-├── App.tsx                    # Route definitions + RequireAuth guard
+├── App.tsx                    # Route definitions + RequireAuth + ErrorBoundary + lazy loading
 ├── main.tsx                   # React root — Router, ThemeProvider, AuthProvider
 ├── index.css                  # Global styles, CSS variables, Tailwind directives
 ├── types/index.ts             # All shared TypeScript interfaces
@@ -124,6 +123,7 @@ src/
 │   │   ├── ProgressBar.tsx      # Animated bar (slate/emerald/rose/amber)
 │   │   ├── ExcelGrid.tsx        # AG Grid wrapper with validation highlights
 │   │   ├── BlobBackground.tsx   # Decorative gradient orbs (light mode)
+│   │   ├── ErrorBoundary.tsx   # React class error boundary with recovery UI
 │   │   └── WalkingPets.tsx      # Animated SVG pets (processing state)
 │   ├── migration/
 │   │   ├── JobCard.tsx          # Migration job summary card
@@ -131,6 +131,11 @@ src/
 │   │   ├── StatCard.tsx         # Single stat number with icon
 │   │   ├── ShopifyGridView.tsx  # Product card grid (1 card/product)
 │   │   └── ShopifyCsvView.tsx   # Shopify CSV column layout
+│   ├── charts/
+│   │   ├── ActivityAreaChart.tsx # 14-day area chart (migrations + crawls)
+│   │   ├── BarsChart.tsx        # Horizontal bar chart variant
+│   │   ├── DonutChart.tsx       # Interactive donut with custom tooltip
+│   │   └── RingChart.tsx        # Thin ring chart variant
 │   └── rows/
 │       ├── FailedRowCard.tsx    # Error display per failed row
 │       └── ManualEditModal.tsx  # Modal to manually correct row data
@@ -1121,6 +1126,66 @@ DataCellRenderer → red dot + hover tooltip
 - `storeCrawlSession`, `getStoredCrawlSessions`, `removeCrawlSession` functions
 - `storeJobId`, `getStoredJobIds` functions
 - `crawlApi.getSession()` (endpoint removed from backend)
+
+### 2026-03-27 (optimisation & hardening pass)
+
+**Crawl API Changes**
+- `POST /crawl` request body simplified to 4 required fields: `url`, `user_id`, `name`, `max_products` (removed `max_pages`, `max_depth`)
+- `max_products` is now required (must be > 0)
+- `GET /crawl/status` response now includes `max_products` field
+- Crawl progress bar driven by `max_products` from status API (not user input)
+
+**Dashboard Redesign (v2)**
+- Replaced 3-column layout (chart + health bars + crawl summary) with 2-column layout (area chart left 3/5 + donut right 2/5)
+- New `ActivityAreaChart` component: 14-day area chart with gradient fills showing migrations & crawls
+- Removed Migration Health bars and Crawl Summary cards
+- All derived stats wrapped in `useMemo` to avoid recalculation on unrelated state changes
+- `recentAll`, `recentJobs`, `recentCrawls`, `donutSlices`, `activityData` all memoized
+
+**Donut/Ring Chart Tooltip Fix**
+- Replaced Recharts `<Tooltip>` with custom mouse-tracked tooltip (`onMouseMove` + `getBoundingClientRect`)
+- Tooltip now follows cursor correctly and disappears on `onMouseLeave` of container div
+- Applied to both `DonutChart` and `RingChart`
+
+**Settings Page**
+- Consolidated Dashboard settings from 4 separate cards into 1 card (matching other sections)
+- Removed `showHealth` and `showCrawl` toggles (panels removed from Dashboard)
+- Updated "Charts Panel" toggle description
+- Button/toggle styles unified with other sections (dark mode borders, emerald active state)
+- Removed `DASH_SHOW_HEALTH` and `DASH_SHOW_CRAWL` exports
+
+**Error Boundary**
+- New `ErrorBoundary` class component (`components/ui/ErrorBoundary.tsx`)
+- Wraps entire app in `App.tsx` — catches render crashes and shows recovery UI
+- Shows error details in DEV mode only
+
+**Lazy Loading**
+- Heavy pages lazy-loaded with `React.lazy()`: NewMigration, JobProgress, FailedRows, Export, Settings, ResultsGrid, BatchExport, MergedJobView, CrawlDetail
+- Each wrapped in `<Suspense fallback={<PageLoader />}>` for loading state
+- Reduces initial bundle size significantly
+
+**Console Log Cleanup**
+- All `console.log` calls in `JobProgress.tsx` gated behind `import.meta.env.DEV`
+- Removed stale debug log (`"soket /////////////////"` typo)
+- Empty catch blocks in `CrawlDetail.tsx` and `JobProgress.tsx` now log errors in DEV mode
+
+**Polling Stability**
+- `JobProgress.tsx`: Removed `eslint-disable` for useEffect deps — `stopPoll` and `startFallbackPoll` now properly included (stable via `useCallback`)
+- `NewMigration.tsx`: Removed `websiteUrl` and `user` from crawl poll deps — these aren't used inside the poll and caused unnecessary interval restarts while typing
+
+**CrawlDetail Product Key Fix**
+- Changed React `key` from `p.idx ?? i` to `` `${page}-${i}` `` — fixes silent deduplication when products share the same `idx` value
+
+**NewMigration Layout**
+- Job Name and Max Products side-by-side in 2-column grid (removed separate "Crawl Settings" section)
+- Max Products default changed from 0 to 100, min set to 1 (required by API)
+- Validation: blocks crawl start if `maxProducts < 1`
+
+**TypeScript Fixes**
+- Fixed unused `index` parameter in `JobCard.tsx` (renamed to `_index`)
+
+**Known Remaining Issues**
+- `FailedRowCard.tsx:144` uses `variant="amber"` which is not in Button's Variant type — renders with fallback styling but produces a TS error
 
 ---
 

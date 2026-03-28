@@ -162,11 +162,9 @@ export default function NewMigration() {
 
   // ── Crawler state ──────────────────────────────────────────────────────
   const [crawlState, setCrawlState] = useState<CrawlState>('idle')
-  const [crawlStats, setCrawlStats] = useState({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
+  const [crawlStats, setCrawlStats] = useState({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0, maxProducts: 0 })
   const [crawlJobId, setCrawlJobId] = useState<string | null>(null)
-  const [maxPages, setMaxPages] = useState(100)
-  const [maxDepth, setMaxDepth] = useState(5)
-  const [maxProducts, setMaxProducts] = useState(0)
+  const [maxProducts, setMaxProducts] = useState(100)
   const [crawlError, setCrawlError] = useState('')
   const [crawlName, setCrawlName] = useState('')
   const [extending, setExtending] = useState(false)
@@ -190,6 +188,7 @@ export default function NewMigration() {
         elapsedSeconds:  d.elapsed_seconds        ?? 0,
         currentUrl:      d.current_url            ?? d.url ?? '',
         totalProducts:   d.total_input_products   ?? 0,
+        maxProducts:     d.max_products            ?? 0,
       })
       if (d.job_id) setCrawlJobId(d.job_id)
       if (d.url)    setWebsiteUrl((prev) => prev || d.url!)
@@ -213,6 +212,7 @@ export default function NewMigration() {
           elapsedSeconds:  d.elapsed_seconds      ?? 0,
           currentUrl:      d.current_url          ?? d.url ?? '',
           totalProducts:   d.total_input_products ?? 0,
+          maxProducts:     d.max_products          ?? 0,
         }
         setCrawlStats(stats)
         if (d.job_id) setCrawlJobId(d.job_id)
@@ -228,7 +228,7 @@ export default function NewMigration() {
       }
     }, 2000)
     return () => { if (crawlIntervalRef.current) clearInterval(crawlIntervalRef.current) }
-  }, [crawlState, websiteUrl, user])
+  }, [crawlState])
 
   // ── Crawl actions ──────────────────────────────────────────────────────
 
@@ -241,21 +241,21 @@ export default function NewMigration() {
       setWebsiteUrl(effectiveUrl)
     }
     if (!effectiveUrl.startsWith('http')) { setErrors({ url: 'URL must start with http:// or https://' }); return }
+    if (maxProducts < 1) { setErrors({ maxProducts: 'Max products must be at least 1.' }); return }
     // Build unique name: use jobName if set, otherwise derive from hostname + date
     const builtName = jobName.trim() ||
       effectiveUrl.replace(/^https?:\/\//, '').split('/')[0].replace(/\W+/g, '-').toLowerCase() +
       '-' + new Date().toISOString().slice(0, 7)
     setCrawlName(builtName)
     setCrawlState('crawling')
-    setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
+    setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0, maxProducts: 0 })
     setCrawlError('')
     try {
-      const d = await crawlApi.start(effectiveUrl, {
+      const d = await crawlApi.start({
+        url:          effectiveUrl,
         name:         builtName,
         user_id:      user?.id ?? 'default',
         max_products: maxProducts,
-        max_pages:    maxPages,
-        max_depth:    maxDepth,
       })
       if (d.job_id) setCrawlJobId(d.job_id)
       // POST /crawl returns immediately ("started") — poll takes over from here
@@ -334,7 +334,7 @@ export default function NewMigration() {
       if (d.job_id) setCrawlJobId(d.job_id)
       // Flip UI into crawling mode so the poll takes over
       setCrawlState('crawling')
-      setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 })
+      setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0, maxProducts: 0 })
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Extend failed'
       if (msg.includes('409') || msg.toLowerCase().includes('already')) {
@@ -590,67 +590,57 @@ export default function NewMigration() {
                     </div>
                   )}
 
-                  {/* Job Name */}
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">
-                      Job Name <span className="normal-case font-normal text-slate-300 dark:text-slate-600">(optional — auto-filled from URL)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={jobName}
-                      onChange={(e) => { setJobName(e.target.value); setErrors({}) }}
-                      placeholder={websiteUrl ? websiteUrl.replace(/^https?:\/\//, '').split('/')[0] + ' migration' : 'e.g. Nike store migration'}
-                      className="w-full px-3 py-3 rounded-xl themed-input bg-transparent text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all"
-                    />
-                  </div>
-
-                  {/* Crawl settings — only when idle/paused */}
+                  {/* Job Name + Max Products — side by side, only when idle/paused */}
                   {(crawlState === 'idle' || crawlState === 'paused') && (
-                    <div className="border-t border-black/5 dark:border-white/5 pt-5">
-                      <p className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-3">Crawl Settings</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        {([
-                          { lbl: 'Max Pages', value: maxPages, min: 1, max: 10000, step: 10, set: setMaxPages, hint: 'pages' },
-                          { lbl: 'Max Depth', value: maxDepth, min: 1, max: 20, step: 1, set: setMaxDepth, hint: 'levels' },
-                          { lbl: 'Max Products', value: maxProducts, min: 0, max: 100000, step: 10, set: setMaxProducts, hint: '0 = unlimited' },
-                        ] as const).map(({ lbl, value, min, max, step: s, set, hint }) => (
-                          <div key={lbl}>
-                            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                              {lbl}
-                              <span className="ml-1.5 text-slate-400 dark:text-slate-500 font-normal text-[10px]">{hint}</span>
-                            </label>
-                            {/* Custom number input — native arrows hidden, custom stacked buttons */}
-                            <div className="flex items-stretch themed-input rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all">
-                              <input
-                                type="number" min={min} max={max} step={s} value={value}
-                                onChange={(e) => { set(Number(e.target.value)); setErrors({}) }}
-                                className="flex-1 min-w-0 pl-3 py-2.5 bg-transparent text-sm text-slate-800 dark:text-slate-100 focus:outline-none tabular-nums
-                                  [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                              />
-                              {/* Stacked ▲ / ▼ buttons */}
-                              <div className="flex flex-col border-l border-black/8 dark:border-white/8 flex-shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => { set(Math.min(max, value + s)); setErrors({}) }}
-                                  className="flex-1 flex items-center justify-center px-2.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors border-b border-black/8 dark:border-white/8 leading-none"
-                                >
-                                  <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
-                                    <path d="M5 0L10 6H0L5 0Z" />
-                                  </svg>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => { set(Math.max(min, value - s)); setErrors({}) }}
-                                  className="flex-1 flex items-center justify-center px-2.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors leading-none"
-                                >
-                                  <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
-                                    <path d="M5 6L0 0H10L5 6Z" />
-                                  </svg>
-                                </button>
-                              </div>
-                            </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Job Name */}
+                      <div>
+                        <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">
+                          Job Name <span className="normal-case font-normal text-slate-300 dark:text-slate-600">(auto-filled from URL)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={jobName}
+                          onChange={(e) => { setJobName(e.target.value); setErrors({}) }}
+                          placeholder={websiteUrl ? websiteUrl.replace(/^https?:\/\//, '').split('/')[0] + ' migration' : 'e.g. Nike store migration'}
+                          className="w-full px-3 py-3 rounded-xl themed-input bg-transparent text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all"
+                        />
+                      </div>
+
+                      {/* Max Products */}
+                      <div>
+                        <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">
+                          Max Products <span className="normal-case font-normal text-rose-400 dark:text-rose-500">*</span>
+                        </label>
+                        <div className="flex items-stretch themed-input rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[rgb(var(--accent,_0_0_0))]/20 transition-all">
+                          <input
+                            type="number" min={1} max={100000} step={10} value={maxProducts}
+                            onChange={(e) => { setMaxProducts(Math.max(1, Number(e.target.value))); setErrors({}) }}
+                            className="flex-1 min-w-0 pl-3 py-3 bg-transparent text-sm text-slate-800 dark:text-slate-100 focus:outline-none tabular-nums
+                              [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                          />
+                          {/* Stacked ▲ / ▼ buttons */}
+                          <div className="flex flex-col border-l border-black/8 dark:border-white/8 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => { setMaxProducts((v) => Math.min(100000, v + 10)); setErrors({}) }}
+                              className="flex-1 flex items-center justify-center px-2.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors border-b border-black/8 dark:border-white/8 leading-none"
+                            >
+                              <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
+                                <path d="M5 0L10 6H0L5 0Z" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setMaxProducts((v) => Math.max(1, v - 10)); setErrors({}) }}
+                              className="flex-1 flex items-center justify-center px-2.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-black/5 dark:hover:bg-white/5 transition-colors leading-none"
+                            >
+                              <svg className="w-2.5 h-2.5" viewBox="0 0 10 6" fill="currentColor">
+                                <path d="M5 6L0 0H10L5 6Z" />
+                              </svg>
+                            </button>
                           </div>
-                        ))}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -674,18 +664,15 @@ export default function NewMigration() {
                         </div>
                       </div>
 
-                      {/* Progress bar — products when limit known, pages otherwise */}
-                      {(maxProducts > 0 || maxPages > 0) && (() => {
-                        // Prefer total_input_products from API, fall back to user-set maxProducts
-                        const productTotal = crawlStats.totalProducts > 0 ? crawlStats.totalProducts : maxProducts
-                        const useProducts  = productTotal > 0
-                        const current      = useProducts ? crawlStats.productsScraped : crawlStats.pagesVisited
-                        const total        = useProducts ? productTotal : maxPages
-                        const pct          = total > 0 ? Math.min((current / total) * 100, 100) : 0
+                      {/* Progress bar — based on max_products from status API */}
+                      {crawlStats.maxProducts > 0 && (() => {
+                        const current      = crawlStats.productsScraped
+                        const total        = crawlStats.maxProducts
+                        const pct          = Math.min((current / total) * 100, 100)
                         return (
                           <div>
                             <div className="flex justify-between text-xs text-slate-400 dark:text-slate-500 mb-1.5">
-                              <span>{useProducts ? 'Products' : 'Pages'}</span>
+                              <span>Products</span>
                               <span>{current} / {total}</span>
                             </div>
                             <div className="h-1.5 bg-black/5 dark:bg-white/5 rounded-full overflow-hidden">
@@ -811,7 +798,7 @@ export default function NewMigration() {
                       <Button type="button" variant="primary" size="lg" icon={<Play className="w-4 h-4" />} onClick={handleResumeCrawl}>
                         Resume Crawling
                       </Button>
-                      <Button type="button" variant="secondary" size="lg" icon={<RotateCcw className="w-4 h-4" />} onClick={() => { setCrawlState('idle'); setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0 }) }}>
+                      <Button type="button" variant="secondary" size="lg" icon={<RotateCcw className="w-4 h-4" />} onClick={() => { setCrawlState('idle'); setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0, maxProducts: 0 }) }}>
                         Start New
                       </Button>
                     </>
