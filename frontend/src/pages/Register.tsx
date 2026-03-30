@@ -6,6 +6,7 @@ import { User, Mail, Lock, ArrowRight } from 'lucide-react'
 import Button from '../components/ui/Button'
 import Logo from '../components/ui/Logo'
 import BlobBackground from '../components/ui/BlobBackground'
+import DottedBackground from '../components/ui/DottedBackground'
 
 export default function Register() {
   const navigate = useNavigate()
@@ -41,6 +42,7 @@ export default function Register() {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
       <BlobBackground />
+      <DottedBackground className="hidden dark:block" />
 
       <motion.div
         className="relative w-full max-w-sm"

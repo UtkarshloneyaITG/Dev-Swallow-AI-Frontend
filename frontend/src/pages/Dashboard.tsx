@@ -215,64 +215,44 @@ export default function Dashboard() {
         {/* ── Hero metric strip ──────────────────────────────────────────── */}
         {showMetrics && <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
           {[
-            {
-              label: 'Products Scraped',
-              value: totalProducts.toLocaleString(),
-              sub: `${crawls.length} crawl${crawls.length !== 1 ? 's' : ''}`,
-              icon: <Package className="w-5 h-5" />,
-              accent: '#0ea5e9',
-              bg: 'bg-sky-50 dark:bg-sky-950/30',
-              iconBg: 'bg-sky-100 dark:bg-sky-900/50 text-sky-600 dark:text-sky-400',
-            },
-            {
-              label: 'Rows Migrated',
-              value: totalRows.toLocaleString(),
-              sub: `${totalCorrect.toLocaleString()} successful`,
-              icon: <Layers className="w-5 h-5" />,
-              accent: '#8b5cf6',
-              bg: 'bg-violet-50 dark:bg-violet-950/30',
-              iconBg: 'bg-violet-100 dark:bg-violet-900/50 text-violet-600 dark:text-violet-400',
-            },
-            {
-              label: 'Success Rate',
-              value: `${successRate}%`,
-              sub: `${totalFailed} failed rows`,
-              icon: <CheckCircle2 className="w-5 h-5" />,
-              accent: '#22c55e',
-              bg: 'bg-emerald-50 dark:bg-emerald-950/30',
-              iconBg: 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400',
-            },
-            {
-              label: 'Active Now',
-              value: String(processingJobs + activeCrawls),
-              sub: `${processingJobs} migrating · ${activeCrawls} crawling`,
-              icon: <Clock className="w-5 h-5" />,
-              accent: '#f59e0b',
-              bg: 'bg-amber-50 dark:bg-amber-950/30',
-              iconBg: 'bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400',
-            },
-          ].map((s, i) => (
-            <motion.div
-              key={s.label}
-              className={`rounded-2xl p-5 border transition-all ${
-                cardStyle === 'filled'   ? `${s.bg} border-black/[0.04] dark:border-white/[0.04]` :
-                cardStyle === 'outlined' ? `themed-card border-2` :
-                                           `themed-card border-black/[0.04] dark:border-white/[0.04]`
-              }`}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.05 + i * 0.07, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <div className={`inline-flex p-2 rounded-xl mb-3 ${cardStyle === 'filled' ? s.iconBg : 'bg-black/5 dark:bg-white/5 text-slate-500 dark:text-slate-400'}`}>{s.icon}</div>
-              <p className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-slate-100 tabular-nums leading-none mb-1">
-                {s.value}
-              </p>
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-0.5">
-                {s.label}
-              </p>
-              <p className="text-[11px] text-slate-400 dark:text-slate-500">{s.sub}</p>
-            </motion.div>
-          ))}
+            { label: 'Products Scraped', value: totalProducts.toLocaleString(),        sub: `${crawls.length} crawl${crawls.length !== 1 ? 's' : ''}`,   icon: <Package     className="w-5 h-5" /> },
+            { label: 'Rows Migrated',    value: totalRows.toLocaleString(),             sub: `${totalCorrect.toLocaleString()} successful`,                icon: <Layers      className="w-5 h-5" /> },
+            { label: 'Success Rate',     value: `${successRate}%`,                      sub: `${totalFailed} failed rows`,                                  icon: <CheckCircle2 className="w-5 h-5" /> },
+            { label: 'Active Now',       value: String(processingJobs + activeCrawls), sub: `${processingJobs} migrating · ${activeCrawls} crawling`,      icon: <Clock       className="w-5 h-5" /> },
+          ].map((s, i) => {
+            const p = palette[i]
+            // Solid palette-tinted background — color-mix blends the palette colour into the
+            // CSS-variable base (white in light mode, slate-800 in dark mode) for a solid result.
+            const cardBg     = `color-mix(in srgb, ${p.color} 10%, rgb(var(--metric-card-base)))`
+            const cardBorder = cardStyle === 'outlined'
+              ? `color-mix(in srgb, ${p.color} 60%, transparent)`
+              : `color-mix(in srgb, ${p.color} 28%, transparent)`
+            return (
+              <motion.div
+                key={s.label}
+                style={{ backgroundColor: cardBg, borderColor: cardBorder }}
+                className={`rounded-2xl p-5 border transition-all ${cardStyle === 'outlined' ? 'border-2' : ''}`}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.05 + i * 0.07, ease: [0.16, 1, 0.3, 1] }}
+              >
+                {/* Icon tinted with palette colour */}
+                <div
+                  style={{ backgroundColor: `${p.color}28`, color: p.color }}
+                  className="inline-flex p-2 rounded-xl mb-3"
+                >
+                  {s.icon}
+                </div>
+                <p className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-slate-100 tabular-nums leading-none mb-1">
+                  {s.value}
+                </p>
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-0.5">
+                  {s.label}
+                </p>
+                <p className="text-[11px] text-slate-400 dark:text-slate-500">{s.sub}</p>
+              </motion.div>
+            )
+          })}
         </div>}
 
         {/* ── Middle section: Area chart (left) + Donut chart (right) ──── */}

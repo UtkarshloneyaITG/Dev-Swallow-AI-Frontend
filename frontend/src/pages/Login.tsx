@@ -6,6 +6,7 @@ import { Mail, Lock, ArrowRight, Settings, Server } from 'lucide-react'
 import Button from '../components/ui/Button'
 import Logo from '../components/ui/Logo'
 import BlobBackground from '../components/ui/BlobBackground'
+import DottedBackground from '../components/ui/DottedBackground'
 import { API_OVERRIDE_KEY, CRAWL_OVERRIDE_KEY } from '../services/api'
 
 export default function Login() {
@@ -57,6 +58,7 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
       <BlobBackground />
+      <DottedBackground className="hidden dark:block" />
 
       <motion.div
         className="relative w-full max-w-sm"

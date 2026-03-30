@@ -3,6 +3,14 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Base color for metric card tinting — overridden by .dark */
+    --metric-card-base: 255 255 255;
+  }
+  .dark {
+    --metric-card-base: 30 41 59;  /* slate-800 */
+  }
+
   * {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
