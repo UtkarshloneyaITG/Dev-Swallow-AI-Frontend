@@ -5,6 +5,7 @@ import { usePageAnimation } from '../hooks/usePageAnimation'
 import { Plus, TrendingUp, CheckCircle2, Clock, Globe, ArrowRight, Package, Layers } from 'lucide-react'
 import Button from '../components/ui/Button'
 import { useAuth } from '../context/AuthContext'
+import { useTheme } from '../context/ThemeContext'
 import { migrationApi, crawlApi } from '../services/api'
 import type { MigrationJob, StoredCrawlSession } from '../types'
 import { PageLoader } from '../components/ui/Spinner'
@@ -60,6 +61,7 @@ function getGreeting() {
 export default function Dashboard() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { theme } = useTheme()
   const pageRef = usePageAnimation()
 
   // ── Dashboard settings ────────────────────────────────────────────────
@@ -184,7 +186,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div ref={pageRef} className="min-h-screen relative z-10 bg-slate-50/50 dark:bg-transparent">
+    <div ref={pageRef} className="min-h-screen relative z-10">
 
       {/* ── Greeting header ─────────────────────────────────────────────── */}
       <div className="px-4 sm:px-8 pt-8 pb-0 max-w-6xl mx-auto">
@@ -221,26 +223,30 @@ export default function Dashboard() {
             { label: 'Active Now',       value: String(processingJobs + activeCrawls), sub: `${processingJobs} migrating · ${activeCrawls} crawling`,      icon: <Clock       className="w-5 h-5" /> },
           ].map((s, i) => {
             const p = palette[i]
-            // Solid palette-tinted background — color-mix blends the palette colour into the
-            // CSS-variable base (white in light mode, slate-800 in dark mode) for a solid result.
-            const cardBg     = `color-mix(in srgb, ${p.color} 10%, rgb(var(--metric-card-base)))`
-            const cardBorder = cardStyle === 'outlined'
-              ? `color-mix(in srgb, ${p.color} 60%, transparent)`
-              : `color-mix(in srgb, ${p.color} 28%, transparent)`
+            // Dark theme: pure grey/black — no colour tint at all
+            // All other themes: palette colour blended into the theme's base colour
+            const isDarkTheme = theme === 'dark'
+            const cardBg = isDarkTheme
+              ? '#141416'
+              : `color-mix(in srgb, ${p.color} 10%, rgb(var(--metric-card-base)))`
+            // Gradient border: top-left brighter, bottom-right dimmer — same logic as --border-start/end
+            const bStart = isDarkTheme ? 'rgba(255,255,255,0.13)' : `color-mix(in srgb, ${p.color} 40%, transparent)`
+            const bEnd   = isDarkTheme ? 'rgba(255,255,255,0.04)' : `color-mix(in srgb, ${p.color} 12%, transparent)`
+            const borderWidth = cardStyle === 'outlined' ? 2 : 1
+            const cardBoxShadow = `inset 0 ${borderWidth}px 0 ${bStart}, inset 0 -${borderWidth}px 0 ${bEnd}, inset ${borderWidth}px 0 0 ${bStart}, inset -${borderWidth}px 0 0 ${bEnd}`
+            const iconStyle = isDarkTheme
+              ? { backgroundColor: 'rgba(255,255,255,0.07)', color: '#94a3b8' }
+              : { backgroundColor: `${p.color}28`, color: p.color }
             return (
               <motion.div
                 key={s.label}
-                style={{ backgroundColor: cardBg, borderColor: cardBorder }}
-                className={`rounded-2xl p-5 border transition-all ${cardStyle === 'outlined' ? 'border-2' : ''}`}
+                style={{ backgroundColor: cardBg, boxShadow: cardBoxShadow }}
+                className="rounded-2xl p-5 transition-colors"
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.4, delay: 0.05 + i * 0.07, ease: [0.16, 1, 0.3, 1] }}
               >
-                {/* Icon tinted with palette colour */}
-                <div
-                  style={{ backgroundColor: `${p.color}28`, color: p.color }}
-                  className="inline-flex p-2 rounded-xl mb-3"
-                >
+                <div style={iconStyle} className="inline-flex p-2 rounded-xl mb-3">
                   {s.icon}
                 </div>
                 <p className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-slate-100 tabular-nums leading-none mb-1">

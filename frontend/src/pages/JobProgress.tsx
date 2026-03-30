@@ -432,11 +432,11 @@ export default function JobProgress() {
             <span className="text-xs text-slate-400 dark:text-slate-500">
               {processedRows} / {total} rows processed
             </span>
-            {isLive && (
+            {/* {isLive && (
               <span className="text-xs text-slate-400 dark:text-slate-500">
                 ~{Math.max(0, Math.ceil((total - processedRows) / 8))} seconds remaining
               </span>
-            )}
+            )} */}
           </div>
         </div>
 

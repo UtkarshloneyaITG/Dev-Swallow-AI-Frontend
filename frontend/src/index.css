@@ -3,14 +3,6 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    /* Base color for metric card tinting — overridden by .dark */
-    --metric-card-base: 255 255 255;
-  }
-  .dark {
-    --metric-card-base: 30 41 59;  /* slate-800 */
-  }
-
   * {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -23,7 +15,7 @@
   }
 
   body {
-    background-color: var(--page-bg, #f8fafc);
+    background-color: var(--page-bg, #f5f4f2);
     @apply dark:text-slate-100 min-h-screen;
     transition: background-color 0.4s ease, color 0.3s ease;
   }
@@ -57,35 +49,73 @@
 
 @layer utilities {
   /* Theme-aware surface utilities */
+
+  /*
+   * Gradient border system — simulates Gemini Studio style lit-from-top-left borders.
+   * Uses 4 inset box-shadows: top+left edges use --border-start (brighter),
+   * bottom+right edges use --border-end (dimmer). Works with any border-radius
+   * and any background including semi-transparent / backdrop-blur surfaces.
+   */
   .themed-card {
     background-color: var(--card-bg, rgba(255,255,255,0.6));
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--card-border, rgba(0,0,0,0.05));
+    border: none;
+    box-shadow:
+      inset 0  1px 0 var(--border-start, rgba(255,255,255,0.12)),
+      inset 0 -1px 0 var(--border-end,   rgba(255,255,255,0.04)),
+      inset  1px 0 0 var(--border-start, rgba(255,255,255,0.12)),
+      inset -1px 0 0 var(--border-end,   rgba(255,255,255,0.04));
   }
 
   .themed-header {
     background-color: var(--header-bg, rgba(255,255,255,0.4));
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--card-border, rgba(0,0,0,0.05));
+    border: none;
+    box-shadow: inset 0 -1px 0 var(--border-end, rgba(0,0,0,0.06));
   }
 
   .themed-input {
     background-color: var(--input-bg, rgba(255,255,255,0.6));
-    border: 1px solid var(--input-border, rgba(0,0,0,0.1));
+    border: none;
+    box-shadow:
+      inset 0  1px 0 var(--border-start, rgba(0,0,0,0.08)),
+      inset 0 -1px 0 var(--border-end,   rgba(0,0,0,0.04)),
+      inset  1px 0 0 var(--border-start, rgba(0,0,0,0.08)),
+      inset -1px 0 0 var(--border-end,   rgba(0,0,0,0.04));
+  }
+
+  /* Reusable gradient border utility — apply to any element */
+  .gradient-border {
+    border: none;
+    box-shadow:
+      inset 0  1px 0 var(--border-start, rgba(255,255,255,0.12)),
+      inset 0 -1px 0 var(--border-end,   rgba(255,255,255,0.04)),
+      inset  1px 0 0 var(--border-start, rgba(255,255,255,0.12)),
+      inset -1px 0 0 var(--border-end,   rgba(255,255,255,0.04));
   }
 
   .themed-divider {
-    border-color: var(--card-border, rgba(0,0,0,0.05));
+    border-color: var(--border-end, rgba(0,0,0,0.05));
   }
 
   .glass {
-    @apply bg-white/60 backdrop-blur-md border border-white/40 dark:bg-slate-800/60 dark:border-white/10;
+    @apply bg-white/60 backdrop-blur-md dark:bg-slate-800/60;
+    box-shadow:
+      inset 0  1px 0 var(--border-start, rgba(255,255,255,0.12)),
+      inset 0 -1px 0 var(--border-end,   rgba(255,255,255,0.04)),
+      inset  1px 0 0 var(--border-start, rgba(255,255,255,0.12)),
+      inset -1px 0 0 var(--border-end,   rgba(255,255,255,0.04));
   }
 
   .glass-heavy {
-    @apply bg-white/80 backdrop-blur-xl border border-black/5 dark:bg-slate-900/80 dark:border-white/5;
+    @apply bg-white/80 backdrop-blur-xl dark:bg-slate-900/80;
+    box-shadow:
+      inset 0  1px 0 var(--border-start, rgba(255,255,255,0.10)),
+      inset 0 -1px 0 var(--border-end,   rgba(255,255,255,0.03)),
+      inset  1px 0 0 var(--border-start, rgba(255,255,255,0.10)),
+      inset -1px 0 0 var(--border-end,   rgba(255,255,255,0.03));
   }
 
   .text-gradient {
@@ -100,6 +130,58 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+}
+
+/* ─── Global theme-surface overrides ─────────────────────────────────────────
+ * Remaps hardcoded Tailwind dark:bg-slate-* / dark:border-slate-* values to
+ * CSS vars so every page automatically follows the active theme without
+ * per-file edits. Tailwind generates `.dark .dark\:bg-slate-900 { }` so we
+ * override those specific rules here with higher specificity + !important.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* Page-level backgrounds */
+.dark .dark\:bg-slate-950 { background-color: var(--page-bg) !important; }
+.dark .dark\:bg-slate-900 { background-color: var(--card-bg) !important; }
+
+/* Raised surfaces — pills, icon wells, inner panels */
+.dark .dark\:bg-slate-800 { background-color: rgba(255,255,255,0.055) !important; }
+.dark .dark\:bg-slate-700 { background-color: rgba(255,255,255,0.09)  !important; }
+
+/* Hover backgrounds */
+.dark .dark\:hover\:bg-slate-800:hover { background-color: rgba(255,255,255,0.07)  !important; }
+.dark .dark\:hover\:bg-slate-700:hover { background-color: rgba(255,255,255,0.11)  !important; }
+.dark .dark\:hover\:bg-slate-600:hover { background-color: rgba(255,255,255,0.14)  !important; }
+
+/* Borders — replace solid slate borders with gradient inset box-shadow.
+ * Setting border-color: transparent preserves layout (no reflow) while the
+ * box-shadow provides the lit top-left / dim bottom-right gradient effect. */
+.dark .dark\:border-slate-800,
+.dark .dark\:border-slate-700 {
+  border-color: transparent !important;
+  box-shadow:
+    inset 0  1px 0 var(--border-start),
+    inset 0 -1px 0 var(--border-end),
+    inset  1px 0 0 var(--border-start),
+    inset -1px 0 0 var(--border-end) !important;
+}
+.dark .dark\:border-slate-600 {
+  border-color: transparent !important;
+  box-shadow:
+    inset 0  1px 0 var(--border-start),
+    inset 0 -1px 0 var(--border-end),
+    inset  1px 0 0 var(--border-start),
+    inset -1px 0 0 var(--border-end) !important;
+}
+
+/* Hover borders */
+.dark .dark\:hover\:border-slate-600:hover,
+.dark .dark\:hover\:border-slate-500:hover {
+  border-color: transparent !important;
+  box-shadow:
+    inset 0  1px 0 var(--border-start),
+    inset 0 -1px 0 var(--border-end),
+    inset  1px 0 0 var(--border-start),
+    inset -1px 0 0 var(--border-end) !important;
 }
 
 /* Dashboard walking pet — right direction */

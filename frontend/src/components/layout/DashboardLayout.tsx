@@ -10,7 +10,7 @@ export default function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   return (
-    <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-300 relative">
+    <div className="flex min-h-screen transition-colors duration-300 relative" style={{ backgroundColor: 'var(--page-bg)' }}>
       <BlobBackground />
       <DottedBackground className="hidden dark:block" />
 
@@ -26,7 +26,10 @@ export default function DashboardLayout() {
 
       <main className="relative z-10 flex-1 overflow-y-auto min-h-screen">
         {/* Mobile top bar */}
-        <div className="md:hidden sticky top-0 z-30 flex items-center gap-3 px-4 py-3 border-b border-black/5 dark:border-white/5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl">
+        <div
+          className="md:hidden sticky top-0 z-30 flex items-center gap-3 px-4 py-3 themed-header backdrop-blur-xl"
+          style={{ backgroundColor: 'var(--header-bg)' }}
+        >
           <button
             onClick={() => setSidebarOpen(true)}
             className="p-2 -ml-1 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"

@@ -305,7 +305,7 @@ export default function DottedBackground({ children, className }: Props) {
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            'radial-gradient(ellipse 80% 70% at 50% 50%, transparent 35%, rgba(7,7,15,0.72) 100%)',
+            'radial-gradient(ellipse 80% 70% at 50% 50%, transparent 35%, rgba(0, 0, 0, 0.72) 100%)',
         }}
       />
 

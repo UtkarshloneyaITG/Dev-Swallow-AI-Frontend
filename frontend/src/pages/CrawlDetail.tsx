@@ -182,7 +182,7 @@ export default function CrawlDetail() {
     <div ref={pageRef} className="min-h-screen relative z-10">
 
       {/* ── Hero header ─────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden bg-gradient-to-br from-sky-50 via-white to-blue-50 dark:from-slate-900 dark:via-slate-900 dark:to-sky-950/30 border-b border-black/5 dark:border-white/5">
+      <div className="relative overflow-hidden border-b" style={{ backgroundColor: 'var(--card-bg)', borderColor: 'var(--border-end)' }}>
         {/* Subtle grid pattern */}
         <div className="absolute inset-0 opacity-[0.03] dark:opacity-[0.06]"
           style={{ backgroundImage: 'radial-gradient(circle, #0ea5e9 1px, transparent 1px)', backgroundSize: '24px 24px' }}
@@ -201,7 +201,7 @@ export default function CrawlDetail() {
           <div className="flex flex-wrap items-start justify-between gap-5">
             {/* Left: icon + title */}
             <div className="flex items-start gap-4">
-              <div className="p-3 rounded-2xl bg-white dark:bg-slate-800 shadow-sm border border-black/5 dark:border-white/5 flex-shrink-0">
+              <div className="p-3 rounded-2xl shadow-sm flex-shrink-0" style={{ backgroundColor: 'var(--input-bg)', boxShadow: 'inset 0 1px 0 var(--border-start), inset 0 -1px 0 var(--border-end), inset 1px 0 0 var(--border-start), inset -1px 0 0 var(--border-end)' }}>
                 <Globe className="w-6 h-6 text-sky-500" />
               </div>
               <div>
@@ -215,7 +215,7 @@ export default function CrawlDetail() {
                 </h1>
                 <div className="flex flex-wrap items-center gap-3 mt-2">
                   {/* Status pill */}
-                  <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ring-1 bg-white dark:bg-slate-800 ${cfg.ring} ${cfg.text}`}>
+                  <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${cfg.text}`} style={{ backgroundColor: 'var(--input-bg)', boxShadow: 'inset 0 1px 0 var(--border-start), inset 0 -1px 0 var(--border-end), inset 1px 0 0 var(--border-start), inset -1px 0 0 var(--border-end)' }}>
                     <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
                     {cfg.label}
                   </span>
@@ -267,7 +267,8 @@ export default function CrawlDetail() {
             ].map((s, i) => (
               <motion.div
                 key={s.label}
-                className="bg-white/70 dark:bg-slate-800/70 backdrop-blur-sm rounded-xl p-3.5 border border-black/5 dark:border-white/5 shadow-sm"
+                className="backdrop-blur-sm rounded-xl p-3.5"
+                style={{ backgroundColor: 'var(--input-bg)', boxShadow: 'inset 0 1px 0 var(--border-start), inset 0 -1px 0 var(--border-end), inset 1px 0 0 var(--border-start), inset -1px 0 0 var(--border-end)' }}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.05 + i * 0.05 }}

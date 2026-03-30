@@ -42,9 +42,15 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
   }
 
   const sidebarContent = (
-    <div className="w-60 flex-shrink-0 h-screen flex flex-col backdrop-blur-xl border-r border-orange-100/60 dark:border-white/5 overflow-hidden bg-white/50 dark:bg-slate-900/70">
+    <div
+      className="w-60 flex-shrink-0 h-screen flex flex-col backdrop-blur-xl overflow-hidden"
+      style={{
+        backgroundColor: 'var(--sidebar-bg)',
+        boxShadow: 'inset -1px 0 0 var(--border-end), inset 0 1px 0 var(--border-start)',
+      }}
+    >
       {/* Logo */}
-      <div className="relative px-5 pt-6 pb-5 border-b border-black/5 dark:border-white/5">
+      <div className="relative px-5 pt-6 pb-5" style={{ boxShadow: 'inset 0 -1px 0 var(--border-end)' }}>
         <div className="flex items-center gap-2.5">
           <Logo size={42} />
           <div className="flex-1 min-w-0">
@@ -106,9 +112,9 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
       </nav>
 
       {/* User + Logout */}
-      <div className="px-3 pb-5 border-t border-black/5 dark:border-white/5 pt-4 space-y-1">
+      <div className="px-3 pb-5 pt-4 space-y-1" style={{ boxShadow: 'inset 0 1px 0 var(--border-end)' }}>
         <div className="flex items-center gap-2.5 px-3 py-2">
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-[#F97316] dark:from-slate-700 dark:to-slate-900 flex items-center justify-center flex-shrink-0">
+          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-[#F97316] dark:from-neutral-600 dark:to-neutral-800 flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-semibold text-white">
               {user?.avatarInitials ?? '?'}
             </span>
