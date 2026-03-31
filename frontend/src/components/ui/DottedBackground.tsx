@@ -55,7 +55,7 @@ const DAMPING = 0.40
 const ALPHA_REST = 0.20
 
 /** Dot opacity at maximum displacement (fully pushed by cursor) */
-const ALPHA_PEAK = 0.25
+const ALPHA_PEAK = 0.50
 
 /** Page background — matches the app dark-mode palette */
 const BG_COLOR = '#050509'

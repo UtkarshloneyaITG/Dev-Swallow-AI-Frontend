@@ -1,11 +1,4 @@
-import { useState, useRef } from 'react'
-import {
-  PieChart,
-  Pie,
-  Sector,
-  ResponsiveContainer,
-} from 'recharts'
-import type { PieSectorDataItem } from 'recharts/types/polar/Pie'
+import { useState } from 'react'
 
 export interface DonutSlice {
   label: string
@@ -19,143 +12,148 @@ interface Props {
   total: number
 }
 
-function ActiveSector(props: PieSectorDataItem) {
-  const { cx, cy, innerRadius, outerRadius = 0, startAngle, endAngle, fill } = props
-  return (
-    <Sector
-      cx={cx}
-      cy={cy}
-      innerRadius={innerRadius}
-      outerRadius={outerRadius + 6}
-      startAngle={startAngle}
-      endAngle={endAngle}
-      fill={fill}
-    />
-  )
+// ─── Geometry ─────────────────────────────────────────────────────────────────
+const SIZE    = 180
+const CX      = SIZE / 2
+const CY      = SIZE / 2
+const OUTER_R = 80
+const INNER_R = 62   // thin ring — modern minimal style
+const GAP_DEG = 2
+
+function polar(r: number, deg: number) {
+  const rad = (deg - 90) * (Math.PI / 180)
+  return { x: CX + r * Math.cos(rad), y: CY + r * Math.sin(rad) }
 }
 
-function InactiveSector(props: PieSectorDataItem) {
-  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props
-  return (
-    <Sector
-      cx={cx}
-      cy={cy}
-      innerRadius={innerRadius}
-      outerRadius={outerRadius}
-      startAngle={startAngle}
-      endAngle={endAngle}
-      fill={fill}
-      opacity={0.35}
-    />
-  )
+function arcPath(start: number, end: number): string {
+  const s  = start + GAP_DEG / 2
+  const e  = end   - GAP_DEG / 2
+  if (e - s < 0.3) return ''
+  const lg = e - s > 180 ? 1 : 0
+  const f  = (v: number) => +v.toFixed(3)
+  const o1 = polar(OUTER_R, s), o2 = polar(OUTER_R, e)
+  const i1 = polar(INNER_R, s), i2 = polar(INNER_R, e)
+  return `M${f(o1.x)} ${f(o1.y)} A${OUTER_R} ${OUTER_R} 0 ${lg} 1 ${f(o2.x)} ${f(o2.y)} L${f(i2.x)} ${f(i2.y)} A${INNER_R} ${INNER_R} 0 ${lg} 0 ${f(i1.x)} ${f(i1.y)}Z`
 }
 
+// ─── Component ────────────────────────────────────────────────────────────────
 export default function DonutChart({ slices, total }: Props) {
-  const [activeIdx, setActiveIdx] = useState<number | null>(null)
-  const [mouse, setMouse] = useState({ x: 0, y: 0 })
-  const containerRef = useRef<HTMLDivElement>(null)
+  const [hovered, setHovered] = useState<number | null>(null)
 
-  const dominant = slices.reduce(
-    (best, s, i) => (s.value > slices[best].value ? i : best),
-    0,
-  )
-  const display = activeIdx !== null ? activeIdx : dominant
+  let deg = 0
+  const segments = slices.map((s, i) => {
+    const sweep = total > 0 ? (s.value / total) * 360 : 0
+    const out = { ...s, i, startDeg: deg, endDeg: deg + sweep,
+                  pct: total > 0 ? Math.round((s.value / total) * 100) : 0 }
+    deg += sweep
+    return out
+  })
 
-  const data = slices.map((s) => ({
-    name:  s.label,
-    value: s.value || 0,
-    fill:  s.color,
-    color: s.color,
-    light: s.light,
-    label: s.label,
-  }))
-
-  const activeSlice = activeIdx !== null ? slices[activeIdx] : null
-
-  function handleMouseMove(e: React.MouseEvent) {
-    if (!containerRef.current) return
-    const rect = containerRef.current.getBoundingClientRect()
-    setMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top })
-  }
+  const dominant = slices.reduce((b, s, i) => s.value > slices[b].value ? i : b, 0)
+  const show     = hovered ?? dominant
+  const active   = segments[show]
 
   return (
-    <div className="relative w-full flex flex-col items-center">
-      <div
-        ref={containerRef}
-        className="relative w-[200px] h-[200px]"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => setActiveIdx(null)}
-      >
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data}
-              cx="50%"
-              cy="50%"
-              innerRadius={62}
-              outerRadius={88}
-              paddingAngle={3}
-              dataKey="value"
-              startAngle={90}
-              endAngle={-270}
-              strokeWidth={0}
-              animationBegin={0}
-              animationDuration={700}
-              animationEasing="ease-out"
-              style={{ cursor: 'pointer', outline: 'none' }}
-              onMouseEnter={(_, idx) => setActiveIdx(idx)}
-              onMouseLeave={() => setActiveIdx(null)}
-              activeShape={(props: PieSectorDataItem) => <ActiveSector {...props} />}
-              inactiveShape={activeIdx !== null ? (props: PieSectorDataItem) => <InactiveSector {...props} /> : undefined}
-            />
-          </PieChart>
-        </ResponsiveContainer>
+    <div className="flex flex-col items-center w-full gap-5">
 
-        {/* Center label */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+      {/* ── Ring ─────────────────────────────────────────────────────── */}
+      <div className="relative flex-shrink-0" style={{ width: SIZE, height: SIZE }}>
+        <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ overflow: 'visible' }}>
+
+          {/* Track */}
+          <circle cx={CX} cy={CY}
+            r={(OUTER_R + INNER_R) / 2}
+            fill="none"
+            strokeWidth={OUTER_R - INNER_R}
+            stroke="rgba(255,255,255,0.04)"
+          />
+
+          {/* Empty dashed */}
+          {total === 0 && (
+            <circle cx={CX} cy={CY}
+              r={(OUTER_R + INNER_R) / 2}
+              fill="none"
+              strokeWidth={OUTER_R - INNER_R}
+              stroke="rgba(255,255,255,0.09)"
+              strokeDasharray="4 8"
+            />
+          )}
+
+          {/* Segments */}
+          {total > 0 && segments.map((s) => {
+            const isHov = hovered === s.i
+            const isDim = hovered !== null && !isHov
+            const path  = arcPath(s.startDeg, s.endDeg)
+            if (!path) return null
+            return (
+              <path
+                key={s.label}
+                d={path}
+                fill={s.color}
+                opacity={isDim ? 0.2 : isHov ? 1 : 0.85}
+                style={{
+                  transition: 'opacity 180ms ease',
+                  cursor: 'pointer',
+                  transform: isHov ? `scale(1.04)` : 'scale(1)',
+                  transformBox: 'fill-box',
+                  transformOrigin: 'center',
+                }}
+                onMouseEnter={() => setHovered(s.i)}
+                onMouseLeave={() => setHovered(null)}
+              />
+            )
+          })}
+        </svg>
+
+        {/* Centre */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none gap-0.5">
           <span
-            className="text-3xl font-bold tabular-nums transition-colors duration-150"
-            style={{ color: total === 0 ? '#94a3b8' : slices[display]?.color }}
+            className="text-2xl font-semibold tabular-nums leading-none"
+            style={{ color: total === 0 ? 'rgba(148,163,184,0.4)' : active?.color }}
           >
-            {total === 0 ? '0' : slices[display]?.value ?? 0}
+            {total === 0 ? '—' : active?.value ?? 0}
           </span>
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mt-0.5">
-            {total === 0 ? 'No jobs' : slices[display]?.label}
-          </span>
-          <span className="text-[9px] text-slate-300 dark:text-slate-600 mt-0.5 tabular-nums">
-            of {total} total
+          <span className="text-[10px] font-medium uppercase tracking-widest mt-1"
+            style={{ color: total === 0 ? 'rgba(148,163,184,0.3)' : 'rgba(148,163,184,0.7)' }}>
+            {total === 0 ? 'empty' : active?.label}
           </span>
         </div>
-
-        {/* Custom tooltip — follows cursor relative to chart container */}
-        {activeSlice && (
-          <div
-            className="absolute z-50 pointer-events-none rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg px-3 py-2 transition-opacity duration-100"
-            style={{
-              left: mouse.x + 12,
-              top:  mouse.y - 40,
-            }}
-          >
-            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 whitespace-nowrap">{activeSlice.label}</p>
-            <p className="text-base font-bold tabular-nums mt-0.5" style={{ color: activeSlice.color }}>
-              {activeSlice.value}
-            </p>
-          </div>
-        )}
       </div>
 
-      {/* Legend */}
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 w-full mt-4 px-2">
-        {slices.map((s) => (
-          <div key={s.label} className="flex items-center gap-2">
-            <span
-              className="w-2.5 h-2.5 rounded-full flex-shrink-0 ring-2 ring-offset-1 dark:ring-offset-slate-900"
-              style={{ backgroundColor: s.color }}
-            />
-            <span className="text-xs text-slate-500 dark:text-slate-400 flex-1 truncate">{s.label}</span>
-            <span className="text-xs font-bold text-slate-700 dark:text-slate-300 tabular-nums">{s.value}</span>
-          </div>
-        ))}
+      {/* ── Legend ───────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 w-full px-2">
+        {segments.map((s) => {
+          const isHov = hovered === s.i || (hovered === null && show === s.i)
+          return (
+            <div
+              key={s.label}
+              className="flex items-center gap-2 cursor-pointer"
+              onMouseEnter={() => setHovered(s.i)}
+              onMouseLeave={() => setHovered(null)}
+            >
+              <span
+                className="w-2 h-2 rounded-full flex-shrink-0 transition-all duration-150"
+                style={{
+                  backgroundColor: s.color,
+                  opacity: isHov ? 1 : 0.5,
+                  boxShadow: isHov ? `0 0 5px ${s.color}80` : 'none',
+                }}
+              />
+              <span
+                className="text-xs flex-1 truncate transition-colors duration-150"
+                style={{ color: isHov ? '#e2e8f0' : '#64748b' }}
+              >
+                {s.label}
+              </span>
+              <span
+                className="text-xs font-semibold tabular-nums transition-colors duration-150"
+                style={{ color: isHov ? s.color : '#475569' }}
+              >
+                {s.value}
+              </span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
