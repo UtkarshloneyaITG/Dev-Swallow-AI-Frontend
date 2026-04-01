@@ -286,7 +286,7 @@ export default function DottedBackground({ children, className }: Props) {
   return (
     <div
       className={`fixed inset-0 w-screen h-screen overflow-hidden ${className ?? ''}`}
-      style={{ background: BG_COLOR, cursor: 'none' }}
+      style={{ background: BG_COLOR, }}
     >
       {/* Canvas layer — pointer-events-none so UI elements above stay interactive */}
       <canvas
