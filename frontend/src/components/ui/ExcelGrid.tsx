@@ -117,9 +117,9 @@ function toFlatRow(row: GridRow): FlatRow {
 // Cell class rules — evaluated by AG Grid lazily per cell, replacing cellStyle
 // These CSS classes are injected once via <style> in the render output.
 // ---------------------------------------------------------------------------
-function makeCellClassRules(col: string, editedMap: Record<string, Set<string>>) {
+function makeCellClassRules(col: string, editedMapRef: { current: Record<string, Set<string>> }) {
   return {
-    'cell-edited':   (p: { data?: FlatRow }) => !!(p.data && editedMap[p.data.__meta.id]?.has(col)),
+    'cell-edited':   (p: { data?: FlatRow }) => !!(p.data && editedMapRef.current[p.data.__meta.id]?.has(col)),
     'cell-error':    (p: { data?: FlatRow }) => {
       if (!p.data) return false
       const meta = p.data.__meta
@@ -145,7 +145,7 @@ interface DataCellProps {
   data: FlatRow
   col: string
   setTooltip: React.Dispatch<React.SetStateAction<TooltipState | null>>
-  editedMap: Record<string, Set<string>>
+  editedMap: { current: Record<string, Set<string>> }
 }
 
 function DataCellRenderer({ value, data, col, setTooltip, editedMap }: DataCellProps) {
@@ -154,7 +154,7 @@ function DataCellRenderer({ value, data, col, setTooltip, editedMap }: DataCellP
   const isError  = isFailed && (meta.errorFields?.includes(col) ?? false)
   const severity = meta.cellSeverity?.[col] ?? (isError ? 'error' : null)
   const msg      = meta.cellWarnings?.[col]
-  const isEdited = editedMap[meta.id]?.has(col) ?? false
+  const isEdited = editedMap.current[meta.id]?.has(col) ?? false
 
   const dotColor = severity === 'warning' ? '#f59e0b' : '#f43f5e'
   const textColor = isEdited
@@ -262,6 +262,9 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
 
   // editedMap: rowId → set of edited col keys
   const [editedMap,   setEditedMap]   = useState<Record<string, Set<string>>>({})
+  // Stable ref — colDefs/cellClassRules/DataCellRenderer read from this so colDefs
+  // never need to be recreated on each cell edit (prevents full grid re-render).
+  const editedMapRef = useRef<Record<string, Set<string>>>({})
   const [tooltip,     setTooltip]     = useState<TooltipState | null>(null)
   const [retryingRows,setRetryingRows]= useState<Set<string>>(new Set())
   const [showToast,   setShowToast]   = useState(false)
@@ -334,8 +337,8 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
       resizable: true,
       wrapText: false,
       cellRenderer: 'dataCellRenderer',
-      cellRendererParams: { col, setTooltip, editedMap },
-      cellClassRules: makeCellClassRules(col, editedMap),
+      cellRendererParams: { col, setTooltip, editedMap: editedMapRef },
+      cellClassRules: makeCellClassRules(col, editedMapRef),
       valueGetter: (p) => (p.data as FlatRow)?.[col] ?? '',
       valueSetter: (p) => {
         ;(p.data as FlatRow)[col] = p.newValue
@@ -344,7 +347,7 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
     }))
 
     return [...fixed, ...data]
-  }, [dataCols, editedMap, setTooltip])
+  }, [dataCols])
 
   // Track edits
   const onCellValueChanged = useCallback((e: CellValueChangedEvent<FlatRow>) => {
@@ -366,6 +369,8 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
       const next = { ...prev }
       if (colSet.size === 0) delete next[meta.id]
       else next[meta.id] = colSet
+      // Keep ref in sync so colDefs/cellClassRules always see latest state
+      editedMapRef.current = next
       return next
     })
   }, [])
@@ -376,6 +381,7 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
     const api = apiRef.current
     if (!api || !lastEditedId.current) return
     const id = lastEditedId.current
+    lastEditedId.current = null
     api.forEachNode((node) => {
       if ((node.data as FlatRow)?.__meta.id === id) {
         api.refreshCells({ rowNodes: [node], force: true })
@@ -412,20 +418,21 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
       edited.push({ ...meta, data: updatedData, edited: true })
     })
     onSave(edited)
+    editedMapRef.current = {}
     setEditedMap({})
     setShowToast(true)
     setTimeout(() => setShowToast(false), 2000)
   }
 
   function handleReset() {
-    // Re-derive flat rows from original GridRow data
     if (!apiRef.current) return
+    // Build fresh flat rows from original GridRow data — avoids direct mutation
+    const restored: FlatRow[] = []
     apiRef.current.forEachNode((node) => {
-      const flat = node.data as FlatRow
-      const meta = flat.__meta
-      Object.assign(flat, meta.data)
+      if (node.data) restored.push(toFlatRow((node.data as FlatRow).__meta))
     })
-    apiRef.current.refreshCells({ force: true })
+    apiRef.current.applyTransaction({ update: restored })
+    editedMapRef.current = {}
     setEditedMap({})
   }
 
@@ -443,7 +450,10 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
       {/* AG Grid container */}
-      <div className="flex-1 min-h-0 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+      <div
+        className="flex-1 min-h-0 rounded-xl overflow-hidden"
+        style={{ border: '1px solid var(--border-end, rgba(0,0,0,0.10))' }}
+      >
         <style>{`
           /* ── Light mode ─────────────────────────────────────────── */
           .ag-theme-swallow {
@@ -477,18 +487,18 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
 
           /* ── Dark mode ───────────────────────────────────────────── */
           .dark .ag-theme-swallow {
-            --ag-background-color:              #0f172a;
-            --ag-foreground-color:              #cbd5e1;
-            --ag-header-background-color:       #1e293b;
-            --ag-header-foreground-color:       #94a3b8;
-            --ag-border-color:                  #334155;
-            --ag-row-border-color:              #334155;
-            --ag-cell-horizontal-border:        solid 1px #334155;
-            --ag-row-hover-color:               #1e293b;
-            --ag-selected-row-background-color: #1e3a5f;
-            --ag-odd-row-background-color:      #0f172a;
-            --ag-header-column-separator-color: #334155;
-            --ag-header-column-resize-handle-color: #475569;
+            --ag-background-color:              #080808;
+            --ag-foreground-color:              #d1d5db;
+            --ag-header-background-color:       #141416;
+            --ag-header-foreground-color:       #9ca3af;
+            --ag-border-color:                  rgba(255,255,255,0.08);
+            --ag-row-border-color:              rgba(255,255,255,0.06);
+            --ag-cell-horizontal-border:        solid 1px rgba(255,255,255,0.06);
+            --ag-row-hover-color:               #1a1a1c;
+            --ag-selected-row-background-color: rgba(255,255,255,0.07);
+            --ag-odd-row-background-color:      #080808;
+            --ag-header-column-separator-color: rgba(255,255,255,0.08);
+            --ag-header-column-resize-handle-color: rgba(255,255,255,0.20);
           }
 
           /* ── Remove double outer border ─────────────────────────── */
@@ -680,7 +690,7 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
           </div>
         )
       })()}
-
+  ``
     </div>
   )
 }

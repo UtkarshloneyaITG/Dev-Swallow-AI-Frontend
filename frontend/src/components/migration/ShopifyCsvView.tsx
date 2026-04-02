@@ -128,13 +128,39 @@ const HEADER_KEYS: Record<string, string[]> = {
   'Google Shopping / Custom Label 3':          ['Google Shopping / Custom Label 3', 'google_shopping_custom_label_3'],
   'Google Shopping / Custom Label 4':          ['Google Shopping / Custom Label 4', 'google_shopping_custom_label_4'],
   'Variant Image':                             ['variant_image'],
-  'Variant Weight Unit':                       ['weight_unit'],
+  'Variant Weight Unit':                       ['weight_unit', 'variant_weight_unit'],
   'Variant Tax Code':                          ['tax_code', 'variant_tax_code'],
   'Cost per item':                             ['cost_per_item', 'cost'],
   'Included / International':                  ['included_international', 'Included / International'],
   'Price / International':                     ['price_international', 'Price / International'],
   'Compare At Price / International':          ['compare_at_price_international', 'Compare At Price / International'],
   'Status':                                    ['status'],
+}
+
+// ── Keys already covered by HEADER_KEYS (already mapped to a Shopify header) ─
+const COVERED_KEYS = new Set<string>(Object.values(HEADER_KEYS).flat())
+
+// ── Keys that are structural or handled specially — never shown as raw extras ─
+const SKIP_KEYS = new Set([
+  'images',         // raw array — consumed by parseImages, re-presented as Image Src/Position/Alt cols
+  'options',        // raw array — resolved via resolveOption, re-presented as Option Name/Value cols
+  'variants',       // raw array — already expanded into separate rows
+  'image_src',      // synthetic key added by rowsToGridRows, covered by Image Src header
+  'image_position', // synthetic key added by rowsToGridRows, covered by Image Position header
+  'image_alt',      // synthetic key added by rowsToGridRows, covered by Image Alt Text header
+])
+
+/** Keys in row.data that have no Shopify header mapping — shown as extra raw columns */
+function getExtraKeys(rows: GridRow[]): string[] {
+  const seen = new Set<string>()
+  for (const row of rows) {
+    for (const k of Object.keys(row.data)) {
+      if (!COVERED_KEYS.has(k) && !SKIP_KEYS.has(k) && !k.startsWith('__')) {
+        seen.add(k)
+      }
+    }
+  }
+  return Array.from(seen)
 }
 
 // ── Image object from backend ────────────────────────────────────────────────
@@ -323,7 +349,7 @@ interface FlatCsvRow {
  *
  * All GridRows for the same handle are grouped first, then processed together.
  */
-function expandRows(rows: GridRow[], activeHeaders: string[], imageCache?: Map<string, ImageObject[]>): FlatCsvRow[] {
+function expandRows(rows: GridRow[], activeHeaders: string[], extraKeys: string[], imageCache?: Map<string, ImageObject[]>): FlatCsvRow[] {
   // Group GridRows by handle (each handle = one product, multiple variants)
   const productMap = new Map<string, GridRow[]>()
   const handleOrder: string[] = []
@@ -361,6 +387,8 @@ function expandRows(rows: GridRow[], activeHeaders: string[], imageCache?: Map<s
         else if (h === 'Image Alt Text') flat[h] = img?.alt ?? ''
         else                             flat[h] = resolveCell(d, h)
       }
+      // Extra (non-Shopify) keys — raw values pass through as-is
+      for (const k of extraKeys) flat[k] = d[k] ?? ''
       result.push(flat)
     })
 
@@ -380,6 +408,7 @@ function expandRows(rows: GridRow[], activeHeaders: string[], imageCache?: Map<s
         else if (h === 'Image Alt Text') extra[h] = img.alt ?? ''
         else                             extra[h] = ''  // Shopify spec: blank on image-only rows
       }
+      for (const k of extraKeys) extra[k] = ''
       result.push(extra)
     })
   }
@@ -420,7 +449,8 @@ function CsvCellRenderer({ value, data, header, setTooltip }: CsvCellProps) {
   const row        = data as FlatCsvRow
   const isExtra    = row.__rowType === 'image-extra'
   const meta       = row.__meta
-  const candidates = HEADER_KEYS[header] ?? []
+  // For standard Shopify headers, look up mapped keys; for extra columns, the header IS the key
+  const candidates = HEADER_KEYS[header] ?? [header]
   const matchedKey = !isExtra ? candidates.find((k) => meta.errorFields?.includes(k)) : undefined
   const severity   = matchedKey ? (meta.cellSeverity?.[matchedKey] ?? 'error') : null
   const msg        = matchedKey ? meta.cellWarnings?.[matchedKey] : undefined
@@ -490,9 +520,12 @@ export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
     [rows, imageCache],
   )
 
+  // Keys in row.data that don't map to any Shopify header — appended as raw columns
+  const extraKeys = useMemo(() => getExtraKeys(rows), [rows])
+
   const flatRows = useMemo<FlatCsvRow[]>(
-    () => expandRows(rows, activeHeaders, imageCache),
-    [rows, activeHeaders, imageCache],
+    () => expandRows(rows, activeHeaders, extraKeys, imageCache),
+    [rows, activeHeaders, extraKeys, imageCache],
   )
 
   const totalImages = flatRows.filter((r) => r.__rowType === 'image-extra').length
@@ -552,8 +585,33 @@ export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
       valueGetter: (p) => (p.data as FlatCsvRow)?.[h] ?? '',
     }))
 
-    return [...fixed, ...dataCols]
-  }, [activeHeaders, setTooltip])
+    // Extra (non-Shopify) columns — raw keys appended after all Shopify columns
+    const extraCols: ColDef<FlatCsvRow>[] = extraKeys.map((k) => ({
+      headerName: k.replace(/_/g, ' '),
+      field: k,
+      width: 160,
+      sortable: true,
+      resizable: true,
+      editable: false,
+      cellRenderer: 'csvCellRenderer',
+      cellRendererParams: { header: k, setTooltip },
+      cellStyle: (p) => {
+        if (!p.data) return {}
+        const row = p.data as FlatCsvRow
+        if (row.__rowType === 'image-extra') return {}
+        const meta = row.__meta
+        if (meta.errorFields?.includes(k)) {
+          const severity = meta.cellSeverity?.[k] ?? 'error'
+          if (severity === 'error')   return { background: 'rgb(255 241 242 / 0.7)' } as Record<string, string>
+          if (severity === 'warning') return { background: 'rgb(255 251 235 / 0.6)' } as Record<string, string>
+        }
+        return {}
+      },
+      valueGetter: (p) => (p.data as FlatCsvRow)?.[k] ?? '',
+    }))
+
+    return [...fixed, ...dataCols, ...extraCols]
+  }, [activeHeaders, extraKeys, setTooltip])
 
   const getRowId    = useCallback((p: GetRowIdParams<FlatCsvRow>) => p.data.__id, [])
   const onGridReady = useCallback((e: GridReadyEvent) => { apiRef.current = e.api }, [])
@@ -578,7 +636,8 @@ export default function ShopifyCsvView({ rows }: ShopifyCsvViewProps) {
         <span className="opacity-60 ml-1">
           — {rows.length} product{rows.length !== 1 ? 's' : ''}
           {totalImages > 0 && ` · +${totalImages} image row${totalImages !== 1 ? 's' : ''}`}
-          {' '}· {activeHeaders.length} / {SHOPIFY_HEADERS.length} columns
+          {' '}· {activeHeaders.length} / {SHOPIFY_HEADERS.length} Shopify columns
+          {extraKeys.length > 0 && ` · +${extraKeys.length} extra`}
         </span>
       </div>
 
