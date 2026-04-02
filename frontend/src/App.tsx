@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
+import { Toaster } from 'sonner'
 import { useAuth } from './context/AuthContext'
 import { PageLoader } from './components/ui/Spinner'
 import ErrorBoundary from './components/ui/ErrorBoundary'
@@ -35,6 +36,30 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <ErrorBoundary>
+      <Toaster
+        position="bottom-right"
+        richColors
+        closeButton
+        toastOptions={{
+          duration: 3500,
+          style: { fontFamily: 'inherit', fontSize: '13px' },
+        }}
+      />
+      {/* Sonner close button — right-center, black */}
+      <style>{`
+        [data-sonner-toast] [data-close-button] {
+          left: auto !important;
+          right: 10px !important;
+          top: 50% !important;
+          transform: translateY(-50%) !important;
+          background: #000 !important;
+          border-color: #000 !important;
+          color: #fff !important;
+        }
+        [data-sonner-toast] [data-close-button] svg {
+          stroke: #fff !important;
+        }
+      `}</style>
       <AnimatePresence mode="wait">
         <Routes>
           {/* Public routes */}

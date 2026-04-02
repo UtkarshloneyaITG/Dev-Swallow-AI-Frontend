@@ -78,7 +78,7 @@ export default function CrawlCard({ session, onDelete }: CrawlCardProps) {
           </div>
           <div>
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 group-hover:text-black dark:group-hover:text-white transition-colors truncate max-w-[280px]">
-              {session.url.replace(/^https?:\/\//, '')}
+              {session.name}
             </h3>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className="text-xs text-slate-400 dark:text-slate-500 font-mono uppercase">web crawl</span>

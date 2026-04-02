@@ -79,6 +79,7 @@ export type CrawlSessionStatus = 'idle' | 'crawling' | 'stopping' | 'paused' | '
 
 export interface StoredCrawlSession {
   url: string
+  name?: string
   startedAt: string
   status: CrawlSessionStatus
   pagesVisited: number

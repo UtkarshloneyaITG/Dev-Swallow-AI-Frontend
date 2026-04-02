@@ -20,6 +20,7 @@ import type { GridRow } from '../components/ui/ExcelGrid'
 import ShopifyGridView from '../components/migration/ShopifyGridView'
 import ShopifyCsvView from '../components/migration/ShopifyCsvView'
 import { migrationApi } from '../services/api'
+import { toast } from 'sonner'
 import type { MigrationJob, FailedRow } from '../types'
 import { SHOPIFY_GRID_KEY, SHOPIFY_CSV_KEY } from './Settings'
 
@@ -276,14 +277,14 @@ function rawRecordsToGridRows(records: Record<string, unknown>[]): GridRow[] {
 // ---------------------------------------------------------------------------
 // Column order matches the official Shopify product CSV template exactly.
 const SHOPIFY_HEADERS = [
-  'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 'Tags', 'Published',
+  'Handle', 'Command', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 'Tags', 'Tags Command', 'Published',
   'Option1 Name', 'Option1 Value', 'Option2 Name', 'Option2 Value', 'Option3 Name', 'Option3 Value',
   'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker', 'Variant Inventory Qty',
   'Variant Inventory Policy', 'Variant Fulfillment Service', 'Variant Price', 'Variant Compare At Price',
   'Variant Requires Shipping', 'Variant Taxable', 'Variant Barcode',
   'Image Src', 'Image Position', 'Image Alt Text',
   'SEO Title', 'SEO Description',
-  'Variant Image', 'Variant Weight Unit',
+  'Variant Image', 'Variant Weight Unit', 'Variant Country of Origin',
   'Status',
 ]
 
@@ -317,6 +318,7 @@ function exportToShopifyCSV(rawRows: FailedRow[]) {
 
     // Support both cleaned_data/final_result (snake_case) and original_data (Shopify CSV capitalized keys)
     const handle       = String(p.handle       ?? p['Handle']       ?? '')
+    const command      = String(p.command      ?? p['Command']      ?? 'NEW')
     const title        = String(p.title        ?? p['Title']        ?? '')
     const bodyHtml     = String(p.body_html    ?? p['Body (HTML)']  ?? '')
     const vendor       = String(p.vendor       ?? p['Vendor']       ?? '')
@@ -324,6 +326,7 @@ function exportToShopifyCSV(rawRows: FailedRow[]) {
     const prodType     = String(p.product_type ?? p['Type']         ?? '')
     const rawTags      = p.tags ?? p['Tags']
     const tags         = Array.isArray(rawTags) ? (rawTags as unknown[]).join(', ') : String(rawTags ?? '')
+    const tagsCommand  = String(p.tags_command ?? p['Tags Command'] ?? 'REPLACE')
     const published    = shopifyBool((p.status as string) === 'active' || p.published || p['Published'])
     const status       = String(p.status ?? p['Status'] ?? '')
     const seo          = (p.seo as Record<string, unknown>) ?? {}
@@ -350,12 +353,14 @@ function exportToShopifyCSV(rawRows: FailedRow[]) {
 
       lines.push([
         handle,
+        command,
         first ? title        : '',
         first ? bodyHtml     : '',
         first ? vendor       : '',
         first ? prodCategory : '',
         first ? prodType     : '',
         first ? tags         : '',
+        first ? tagsCommand  : '',
         first ? published    : '',
         first ? opt1Name     : '',  String(v.option1 ?? ''),
         first ? opt2Name     : '',  String(v.option2 ?? ''),
@@ -370,14 +375,15 @@ function exportToShopifyCSV(rawRows: FailedRow[]) {
         String(v.compare_at_price ?? ''),
         shopifyBool(v.requires_shipping),
         shopifyBool(v.taxable),
-        String(v.barcode ?? ''),
-        String(img.src ?? img['Image Src'] ?? ''),
+        String(v.barcode ?? v.upc ?? v.ean ?? ''),
+        String(img.src ?? img.url ?? img['Image Src'] ?? ''),
         String(img.position ?? img['Image Position'] ?? ''),
         String(img.alt ?? img['Image Alt Text'] ?? ''),
         first ? seoTitle : '',
         first ? seoDesc  : '',
-        String(v.image ?? ''),
+        String(v.variant_image ?? v.image ?? v['Variant Image'] ?? ''),
         String(v.weight_unit ?? ''),
+        String(v.country_of_origin ?? v.origin_country ?? p.country_of_origin ?? ''),
         first ? status   : '',
       ])
     }
@@ -537,31 +543,39 @@ export default function ResultsGrid() {
         })
     exportToShopifyCSV(filtered)
     setShowExportModal(false)
+    toast.success(`Exported ${filtered.length} row${filtered.length !== 1 ? 's' : ''} as CSV`)
   }
 
   async function handleRetryRow(rowId: string) {
-    await migrationApi.aiRetry(rowId)
+    const tid = toast.loading('Retrying row…')
+    try {
+      await migrationApi.aiRetry(rowId)
+      toast.success('Row queued for retry', { id: tid })
+    } catch {
+      toast.error('Failed to retry row', { id: tid })
+    }
   }
 
   async function handleSave(edited: GridRow[]) {
-    // Grid row ids are "${backendRowId}_${variantIdx}" — strip the suffix to get the real id
     const calls = edited.map((row) => {
       const rowId = row.id.replace(/_\d+$/, '')
-      // Skip rows without a real backend id (e.g. raw_0, raw_1 fallback rows)
       if (rowId.startsWith('raw_')) return Promise.resolve()
       return migrationApi.correct(rowId, row.data as Record<string, unknown>)
     })
+    const tid = toast.loading(`Saving ${edited.length} row${edited.length !== 1 ? 's' : ''}…`)
     try {
-      await Promise.allSettled(calls)
-      // Mark saved rows as correct in local state
+      const results = await Promise.allSettled(calls)
+      const failed = results.filter((r) => r.status === 'rejected').length
       setRows((prev) =>
         prev.map((r) => {
           const match = edited.find((e) => e.id === r.id)
           return match ? { ...r, status: 'correct' as const, data: match.data } : r
         })
       )
-    } catch (err) {
-      console.error('Save failed:', err)
+      if (failed > 0) toast.warning(`Saved with ${failed} error${failed !== 1 ? 's' : ''}`, { id: tid })
+      else toast.success(`${edited.length} row${edited.length !== 1 ? 's' : ''} saved`, { id: tid })
+    } catch {
+      toast.error('Failed to save changes', { id: tid })
     }
     setEditedCount(0)
   }

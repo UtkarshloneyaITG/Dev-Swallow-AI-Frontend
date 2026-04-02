@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { usePageAnimation } from '../hooks/usePageAnimation'
@@ -82,12 +83,15 @@ export default function Dashboard() {
     if (!user) return
     setLoading(true)
     migrationApi.listJobs(user.id)
-      .then(setJobs).catch(console.error).finally(() => setLoading(false))
+      .then(setJobs)
+      .catch(() => toast.error('Failed to load migrations'))
+      .finally(() => setLoading(false))
     crawlApi.listUserJobs(user.id)
       .then((data) => {
         setCrawls(data.jobs.map((j) => {
           const stats = (j.stats ?? {}) as Record<string, unknown>
           const url = String(j.source_url ?? j.url ?? '')
+          const name = String(j.name ?? j.job_name ?? j.crawl_name ?? '').trim() || undefined
           const productsScraped = (j.total_products as number) ?? (j.product_output as number) ?? (stats.products_scraped as number) ?? 0
           const pagesVisited = (stats.pages_visited as number) ?? (j.pages_visited as number) ?? 0
           const elapsedSeconds = (j.elapsed_seconds as number) ?? (stats.elapsed_seconds as number) ?? 0
@@ -97,9 +101,9 @@ export default function Dashboard() {
             (['idle','crawling','stopping','paused','completed','error'] as const)
               .includes(rawStatus as StoredCrawlSession['status'])
               ? rawStatus as StoredCrawlSession['status'] : 'completed'
-          return { url, startedAt, status, pagesVisited, productsScraped, elapsedSeconds, jobId: String(j.job_id ?? '') }
+          return { url, name, startedAt, status, pagesVisited, productsScraped, elapsedSeconds, jobId: String(j.job_id ?? '') }
         }))
-      }).catch(console.error)
+      }).catch(() => toast.error('Failed to load crawl jobs'))
   }, [user])
 
 
@@ -155,12 +159,12 @@ export default function Dashboard() {
   }, [jobs, crawls])
 
   // Recent activity (memoized)
-  const recentJobs   = useMemo(() => [...jobs].slice(0, 5), [jobs])
-  const recentCrawls = useMemo(() => [...crawls].slice(0, 5), [crawls])
+  const recentJobs   = useMemo(() => [...jobs].slice(0, 15), [jobs])
+  const recentCrawls = useMemo(() => [...crawls].slice(0, 15), [crawls])
   const recentAll = useMemo(() => [
     ...jobs.map(j => ({ type: 'migration' as const, key: j.id, name: j.name, status: j.status, date: j.createdAt, meta: `${j.totalRows} rows` })),
-    ...crawls.map(c => ({ type: 'crawl' as const, key: c.jobId || c.url, name: c.url.replace(/^https?:\/\//, ''), status: c.status, date: c.startedAt, meta: `${c.productsScraped} products` })),
-  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8), [jobs, crawls])
+    ...crawls.map(c => ({ type: 'crawl' as const, key: c.jobId || c.url, name: c.name || c.url.replace(/^https?:\/\//, ''), status: c.status, date: c.startedAt, meta: `${c.productsScraped} products` })),
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 15), [jobs, crawls])
 
   // ── Loading guard (must be after all hooks) ───────────────────────────
   if (loading) return <PageLoader label="Loading dashboard…" />

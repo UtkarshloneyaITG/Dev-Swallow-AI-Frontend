@@ -23,12 +23,14 @@ interface TooltipState { x: number; y: number; msg: string; severity: 'error' | 
 // ── Exact Shopify CSV export column order ────────────────────────────────────
 const SHOPIFY_HEADERS = [
   'Handle',
+  'Command',
   'Title',
   'Body (HTML)',
   'Vendor',
   'Product Category',
   'Type',
   'Tags',
+  'Tags Command',
   'Published',
   'Option1 Name',
   'Option1 Value',
@@ -68,6 +70,7 @@ const SHOPIFY_HEADERS = [
   'Google Shopping / Custom Label 4',
   'Variant Image',
   'Variant Weight Unit',
+  'Variant Country of Origin',
   'Variant Tax Code',
   'Cost per item',
   'Included / International',
@@ -82,12 +85,14 @@ const IMAGE_COLS = new Set(['Image Src', 'Image Position', 'Image Alt Text'])
 // ── Map each Shopify header → flat data keys to try (in order) ───────────────
 const HEADER_KEYS: Record<string, string[]> = {
   'Handle':                                    ['handle'],
+  'Command':                                   ['command', 'Command'],
   'Title':                                     ['title'],
   'Body (HTML)':                               ['body_html'],
   'Vendor':                                    ['vendor'],
   'Product Category':                          ['category', 'product_category'],
   'Type':                                      ['product_type', 'type'],
   'Tags':                                      ['tags'],
+  'Tags Command':                              ['tags_command', 'Tags Command'],
   'Published':                                 ['published'],
   // Options resolved separately via resolveOption()
   'Option1 Name':                              ['option1_name'],
@@ -106,7 +111,7 @@ const HEADER_KEYS: Record<string, string[]> = {
   'Variant Compare At Price':                  ['compare_at_price'],
   'Variant Requires Shipping':                 ['requires_shipping'],
   'Variant Taxable':                           ['taxable'],
-  'Variant Barcode':                           ['barcode'],
+  'Variant Barcode':                           ['barcode', 'upc', 'ean'],
   // Image cols intentionally empty — handled via parseImages()
   'Image Src':                                 [],
   'Image Position':                            [],
@@ -127,8 +132,9 @@ const HEADER_KEYS: Record<string, string[]> = {
   'Google Shopping / Custom Label 2':          ['Google Shopping / Custom Label 2', 'google_shopping_custom_label_2'],
   'Google Shopping / Custom Label 3':          ['Google Shopping / Custom Label 3', 'google_shopping_custom_label_3'],
   'Google Shopping / Custom Label 4':          ['Google Shopping / Custom Label 4', 'google_shopping_custom_label_4'],
-  'Variant Image':                             ['variant_image'],
+  'Variant Image':                             ['variant_image', 'variant_image_src'],
   'Variant Weight Unit':                       ['weight_unit', 'variant_weight_unit'],
+  'Variant Country of Origin':                 ['country_of_origin', 'variant_country_of_origin', 'origin_country'],
   'Variant Tax Code':                          ['tax_code', 'variant_tax_code'],
   'Cost per item':                             ['cost_per_item', 'cost'],
   'Included / International':                  ['included_international', 'Included / International'],
@@ -232,6 +238,7 @@ function parseImageItem(item: unknown): ImageObject[] {
   if (typeof item === 'object') {
     const o = item as Record<string, unknown>
     const src = typeof o.src === 'string' ? o.src.trim()
+      : typeof o.url === 'string' ? o.url.trim()
       : typeof o['Image Src'] === 'string' ? (o['Image Src'] as string).trim() : ''
     // Only accept valid http URLs — skip empty or malformed entries
     if (!src || (!src.startsWith('http://') && !src.startsWith('https://'))) return []
@@ -294,6 +301,15 @@ function resolveCell(data: Record<string, string>, header: string): string {
     case 'Option3 Value': return resolveOption(data, 3, 'value')
     case 'SEO Title':        return data['seo_title'] ?? ''
     case 'SEO Description':  return data['seo_description'] ?? ''
+    // Default to backend CSV exporter values when not explicitly set
+    case 'Command':      {
+      const v = data['command'] ?? data['Command']
+      return (v !== undefined && v !== null && v !== '') ? String(v) : 'NEW'
+    }
+    case 'Tags Command': {
+      const v = data['tags_command'] ?? data['Tags Command']
+      return (v !== undefined && v !== null && v !== '') ? String(v) : 'REPLACE'
+    }
     default: break
   }
 

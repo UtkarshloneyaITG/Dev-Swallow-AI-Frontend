@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { usePageAnimation } from '../hooks/usePageAnimation'
@@ -24,6 +25,7 @@ function mapCrawlJobs(jobs: Record<string, unknown>[]): StoredCrawlSession[] {
   return jobs.map((j) => {
     const stats = (j.stats ?? {}) as Record<string, unknown>
     const url = String(j.source_url ?? j.url ?? '')
+    const name = String(j.name ?? j.job_name ?? j.crawl_name ?? '').trim() || undefined
     const productsScraped =
       (j.total_products as number) ??
       (j.product_output as number) ??
@@ -37,7 +39,7 @@ function mapCrawlJobs(jobs: Record<string, unknown>[]): StoredCrawlSession[] {
       (validStatuses as readonly string[]).includes(rawStatus)
         ? rawStatus as StoredCrawlSession['status']
         : 'completed'
-    return { url, startedAt, status, pagesVisited, productsScraped, elapsedSeconds, jobId: String(j.job_id ?? '') }
+    return { url, name, startedAt, status, pagesVisited, productsScraped, elapsedSeconds, jobId: String(j.job_id ?? '') }
   })
 }
 
@@ -57,10 +59,10 @@ export default function Jobs() {
     if (!user) return
     setLoading(true)
     Promise.all([
-      migrationApi.listJobs(user.id).then(setJobs).catch(console.error),
+      migrationApi.listJobs(user.id).then(setJobs).catch(() => toast.error('Failed to load migrations')),
       crawlApi.listUserJobs(user.id)
         .then((d) => setCrawls(mapCrawlJobs(d.jobs)))
-        .catch(console.error),
+        .catch(() => toast.error('Failed to load crawl jobs')),
     ]).finally(() => setLoading(false))
   }, [user])
 
@@ -68,8 +70,10 @@ export default function Jobs() {
     setJobs((prev) => prev.filter((j) => j.id !== id))
     try {
       await migrationApi.deleteJob(id)
+      toast.success('Job deleted')
     } catch {
-      if (user) migrationApi.listJobs(user.id).then(setJobs).catch(console.error)
+      toast.error('Failed to delete job')
+      if (user) migrationApi.listJobs(user.id).then(setJobs).catch(() => {})
     }
   }
 
@@ -77,7 +81,12 @@ export default function Jobs() {
     const session = crawls.find((s) => s.url === url)
     setCrawls((prev) => prev.filter((s) => s.url !== url))
     if (session?.jobId) {
-      try { await crawlApi.deleteCrawlJob(session.jobId) } catch (err) { console.error(err) }
+      try {
+        await crawlApi.deleteCrawlJob(session.jobId)
+        toast.success('Crawl deleted')
+      } catch {
+        toast.error('Failed to delete crawl')
+      }
     }
   }
 

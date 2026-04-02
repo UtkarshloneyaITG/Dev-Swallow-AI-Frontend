@@ -68,6 +68,7 @@ export default function ActivityAreaChart({ data }: Props) {
         />
         <YAxis
           allowDecimals={false}
+          domain={[0, (dataMax: number) => Math.max(dataMax, 15)]}
           tick={{ fontSize: 10, fill: '#94a3b8' }}
           axisLine={false}
           tickLine={false}

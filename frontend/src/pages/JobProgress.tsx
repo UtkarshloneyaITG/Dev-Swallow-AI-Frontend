@@ -23,6 +23,7 @@ import Button from '../components/ui/Button'
 import StatCard from '../components/migration/StatCard'
 import type { MigrationJob } from '../types'
 import { migrationApi, getAccessToken } from '../services/api'
+import { toast } from 'sonner'
 import WalkingPets from '../components/ui/WalkingPets'
 
 const SOCKET_URL = (import.meta.env.VITE_API_BASE_URL as string) ?? ''
@@ -195,7 +196,11 @@ export default function JobProgress() {
           }).catch((err) => { if (import.meta.env.DEV) console.error('Pending poll error:', err) })
         }, 3000)
       }
-    }).catch((err) => { if (import.meta.env.DEV) console.error('Failed to load job:', err); setLoading(false) })
+    }).catch((err) => {
+      if (import.meta.env.DEV) console.error('Failed to load job:', err)
+      toast.error('Failed to load job')
+      setLoading(false)
+    })
 
     return () => {
       if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
@@ -205,25 +210,35 @@ export default function JobProgress() {
     }
   }, [jobId, stopPoll, startFallbackPoll])
 
-  // Disconnect once job reaches a terminal state
+  // Disconnect once job reaches a terminal state + notify user
+  const prevStatusRef = useRef<string | null>(null)
   useEffect(() => {
-    if (job?.status === 'completed' || job?.status === 'failed') {
+    if (!job?.status) return
+    if (job.status === 'completed' || job.status === 'failed') {
       socketRef.current?.disconnect()
       socketRef.current = null
       stopPoll()
       setSocketStatus('idle')
+      // Only fire the toast when status actually transitions (not on initial load)
+      if (prevStatusRef.current === 'processing') {
+        if (job.status === 'completed') toast.success('Migration completed successfully')
+        else toast.error('Migration finished with errors')
+      }
     }
+    prevStatusRef.current = job.status
   }, [job?.status, stopPoll])
 
   async function handleRestart() {
     if (!jobId || restarting) return
     setRestarting(true)
+    const tid = toast.loading('Restarting migration…')
     try {
       await migrationApi.retry(jobId)
       const refreshed = await migrationApi.getJob(jobId)
       setJob(refreshed)
-    } catch (err) {
-      console.error('Restart failed:', err)
+      toast.success('Migration restarted', { id: tid })
+    } catch {
+      toast.error('Failed to restart migration', { id: tid })
     } finally {
       setRestarting(false)
     }
@@ -232,16 +247,16 @@ export default function JobProgress() {
   async function handleRetry() {
     if (!jobId || retrying) return
     setRetrying(true)
+    const tid = toast.loading('Fetching failed rows…')
     try {
-      // Fetch only the failed rows for this job
       const failedRows = await migrationApi.getRows(jobId, { status: 'failed' })
-      // Fire ai-retry for each failed row individually
+      toast.loading(`Retrying ${failedRows.length} failed row${failedRows.length !== 1 ? 's' : ''}…`, { id: tid })
       await Promise.allSettled(failedRows.map((row) => migrationApi.aiRetry(row.id)))
-      // Re-fetch full job so status + counters reflect the new run
       const refreshed = await migrationApi.getJob(jobId)
       setJob(refreshed)
-    } catch (err) {
-      console.error('Retry failed:', err)
+      toast.success(`Queued ${failedRows.length} row${failedRows.length !== 1 ? 's' : ''} for retry`, { id: tid })
+    } catch {
+      toast.error('Failed to retry rows', { id: tid })
     } finally {
       setRetrying(false)
     }
@@ -253,8 +268,9 @@ export default function JobProgress() {
     try {
       await migrationApi.stop(jobId)
       setJob((prev) => prev ? { ...prev, status: 'failed' } : prev)
-    } catch (err) {
-      console.error('Stop failed:', err)
+      toast.success('Migration stopped')
+    } catch {
+      toast.error('Failed to stop migration')
     } finally {
       setStopping(false)
     }

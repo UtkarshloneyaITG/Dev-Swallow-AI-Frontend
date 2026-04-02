@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { migrationApi, mergedApi } from '../services/api'
+import { toast } from 'sonner'
 import type { MigrationJob, FailedRow, MergedJob } from '../types'
 import ExcelGrid from '../components/ui/ExcelGrid'
 import type { GridRow } from '../components/ui/ExcelGrid'
@@ -224,9 +225,13 @@ function MergedJobCard({
     e.stopPropagation()
     if (!confirm(`Delete "${merge.name}"? This cannot be undone.`)) return
     setDeleting(true)
-    try { await mergedApi.deleteJob(merge.id); onDelete(merge.id) }
-    catch (err) { console.error(err) }
-    finally { setDeleting(false) }
+    try {
+      await mergedApi.deleteJob(merge.id)
+      onDelete(merge.id)
+      toast.success(`"${merge.name}" deleted`)
+    } catch {
+      toast.error('Failed to delete merge')
+    } finally { setDeleting(false) }
   }
   return (
     <div
@@ -307,7 +312,7 @@ export default function BatchExport() {
     if (!user) return
     migrationApi.listJobs(user.id)
       .then((all) => setJobs(all.filter((j) => j.status === 'completed')))
-      .catch(console.error)
+      .catch(() => toast.error('Failed to load completed jobs'))
       .finally(() => setLoadingJobs(false))
   }, [user])
 
@@ -315,7 +320,7 @@ export default function BatchExport() {
     setLoadingSaved(true)
     mergedApi.list()
       .then((list) => { setSavedMerges(list); setSavedLoaded(true) })
-      .catch(console.error)
+      .catch(() => toast.error('Failed to load saved merges'))
       .finally(() => setLoadingSaved(false))
   }
 
@@ -348,35 +353,44 @@ export default function BatchExport() {
   async function handleMerge() {
     if (selected.size === 0) return
     setMerging(true)
+    const tid = toast.loading(`Merging ${selected.size} job${selected.size !== 1 ? 's' : ''}…`)
     try {
       const rows = await fetchBatch([...selected], 'all')
       setRawRows(rows)
       setPreviewRows(convertToGridRows(rows))
       setSaveName(selectedJobs.map((j) => j.name).join(' + '))
       setNewStep('preview')
-    } catch (err) { console.error('Merge failed:', err) }
-    finally { setMerging(false) }
+      toast.success(`Merged ${rows.length} rows`, { id: tid })
+    } catch {
+      toast.error('Failed to merge jobs', { id: tid })
+    } finally { setMerging(false) }
   }
 
   async function handleExport(type: 'all' | 'correct' | 'failed') {
     setExporting(type)
+    const tid = toast.loading('Preparing export…')
     try {
       const rows = type === 'all' ? rawRows : await fetchBatch([...selected], type)
       exportToShopifyCSV(rows, `batch_${type}_${new Date().toISOString().slice(0, 10)}.csv`)
-    } catch (err) { console.error('Export failed:', err) }
-    finally { setExporting(null) }
+      toast.success(`Exported ${rows.length} row${rows.length !== 1 ? 's' : ''} as CSV`, { id: tid })
+    } catch {
+      toast.error('Export failed', { id: tid })
+    } finally { setExporting(null) }
   }
 
   async function handleSaveToLibrary() {
     if (!saveName.trim()) return
     setSaving(true)
+    const tid = toast.loading('Saving to library…')
     try {
       const merged = await mergedApi.save([...selected], saveName.trim())
-      setSavedLoaded(false) // force refresh on next tab visit
+      setSavedLoaded(false)
       setSaveOpen(false)
+      toast.success(`"${saveName.trim()}" saved to library`, { id: tid })
       navigate(`/merged/${merged.id}`)
-    } catch (err) { console.error('Save failed:', err) }
-    finally { setSaving(false) }
+    } catch {
+      toast.error('Failed to save merge', { id: tid })
+    } finally { setSaving(false) }
   }
 
   function goBackToSelect() {

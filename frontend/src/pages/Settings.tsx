@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { usePageAnimation } from '../hooks/usePageAnimation'
 import { Save, Bell, Shield, Sliders, User, Palette, Moon, Sun, Check, Server, RotateCcw, RefreshCw, LayoutDashboard } from 'lucide-react'
+import { toast } from 'sonner'
 import Button from '../components/ui/Button'
 import { useAuth } from '../context/AuthContext'
 import { useTheme, type ColorTheme } from '../context/ThemeContext'
@@ -105,6 +106,7 @@ export default function Settings() {
 
   function handleSave() {
     setSaved(true)
+    toast.success('Profile settings saved')
     setTimeout(() => setSaved(false), 2000)
   }
 
@@ -114,6 +116,7 @@ export default function Settings() {
     if (crawlOverride.trim()) localStorage.setItem(CRAWL_OVERRIDE_KEY, crawlOverride.trim())
     else                      localStorage.removeItem(CRAWL_OVERRIDE_KEY)
     setUrlSaved(true)
+    toast.success('API URLs saved — reloading…')
     setTimeout(() => window.location.reload(), 800)
   }
 
@@ -122,6 +125,7 @@ export default function Settings() {
     localStorage.removeItem(CRAWL_OVERRIDE_KEY)
     setApiOverride('')
     setCrawlOverride('')
+    toast.info('API URL overrides cleared — reloading…')
     setTimeout(() => window.location.reload(), 300)
   }
 

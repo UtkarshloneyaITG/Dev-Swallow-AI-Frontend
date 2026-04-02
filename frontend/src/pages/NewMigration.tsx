@@ -4,6 +4,7 @@ import type { ComponentType, FormEvent, DragEvent, ChangeEvent } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { migrationApi, crawlApi } from '../services/api'
+import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ShoppingBag,
@@ -261,13 +262,14 @@ export default function NewMigration() {
       // POST /crawl returns immediately ("started") — poll takes over from here
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start crawl'
-      // HTTP 409 = another crawl already running
       if (msg.includes('409') || msg.toLowerCase().includes('already')) {
         setCrawlState('idle')
         setCrawlError('A crawl is already running. Stop it first.')
+        toast.warning('A crawl is already running — stop it first')
       } else {
         setCrawlState('error')
         setCrawlError(msg)
+        toast.error(`Crawl failed: ${msg}`)
       }
     }
   }
@@ -281,10 +283,14 @@ export default function NewMigration() {
       if (d.status === 'no_active_crawl') {
         setCrawlState('idle')
         setCrawlError('No active crawl to stop.')
+        toast.info('No active crawl to stop')
+      } else {
+        toast.success('Crawl stopping…')
       }
-      // 'stopped' → stay in stopping; poll will confirm transition to 'paused'
-      // 'already_stopping' → stay in stopping; already in progress
-    } catch { setCrawlState('crawling') }
+    } catch {
+      setCrawlState('crawling')
+      toast.error('Failed to stop crawl')
+    }
   }
 
   /** POST /crawl/control/continue — no URL param needed */
@@ -295,16 +301,22 @@ export default function NewMigration() {
       const d = await crawlApi.resume(crawlJobId ?? '')
       if (d.job_id) setCrawlJobId(d.job_id)
       if (d.status === 'already_running') {
-        // Already going — stay in crawling
+        toast.info('Crawl is already running')
       } else if (d.status === 'still_stopping') {
         setCrawlState('stopping')
         setCrawlError('Previous crawl is still saving — wait a moment and try again.')
+        toast.warning('Previous crawl is still saving — try again shortly')
       } else if (d.status === 'not_stopped' || d.status === 'no_session_data') {
         setCrawlState('idle')
         setCrawlError('No saved session found for this URL.')
+        toast.error('No saved session found')
+      } else {
+        toast.success('Crawl resumed')
       }
-      // 'resuming' → crawling, poll takes over
-    } catch { setCrawlState('paused') }
+    } catch {
+      setCrawlState('paused')
+      toast.error('Failed to resume crawl')
+    }
   }
 
   /** POST /crawl/extend — non-blocking: starts background extension, returns immediately. */
@@ -313,7 +325,6 @@ export default function NewMigration() {
     setExtending(true)
     setCrawlError('')
 
-    // Resolve job_id — fall back to live status if crawlJobId is not cached
     let jobId = crawlJobId
     if (!jobId) {
       try {
@@ -324,23 +335,25 @@ export default function NewMigration() {
     }
     if (!jobId) {
       setCrawlError('No job ID found. Start or complete a crawl first.')
+      toast.error('No job ID found — start a crawl first')
       setExtending(false)
       return
     }
 
     try {
-      // Non-blocking — returns { status: "started", job_id } immediately
       const d = await crawlApi.extend(jobId, extendCount)
       if (d.job_id) setCrawlJobId(d.job_id)
-      // Flip UI into crawling mode so the poll takes over
       setCrawlState('crawling')
       setCrawlStats({ pagesVisited: 0, productsScraped: 0, elapsedSeconds: 0, currentUrl: '', totalProducts: 0, maxProducts: 0 })
+      toast.success(`Extending crawl by ${extendCount} more products`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Extend failed'
       if (msg.includes('409') || msg.toLowerCase().includes('already')) {
         setCrawlError('A crawl is already running. Stop it first.')
+        toast.warning('A crawl is already running — stop it first')
       } else {
         setCrawlError(msg)
+        toast.error(`Extend failed: ${msg}`)
       }
     } finally {
       setExtending(false)
@@ -402,9 +415,12 @@ export default function NewMigration() {
         )
         jobId = res.job_id
       }
+      toast.success('Migration created — tracking progress…')
       navigate(`/jobs/${jobId}`)
     } catch (err) {
-      setErrors({ submit: err instanceof Error ? err.message : 'Submission failed.' })
+      const msg = err instanceof Error ? err.message : 'Submission failed.'
+      setErrors({ submit: msg })
+      toast.error(msg)
     } finally {
       setSubmitting(false)
     }

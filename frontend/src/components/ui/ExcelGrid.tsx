@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
+import { toast } from 'sonner'
 import { AgGridReact } from 'ag-grid-react'
 import {
   ModuleRegistry,
@@ -49,12 +50,14 @@ interface ExcelGridProps {
 // Matches exact Shopify CSV export column order (flat snake_case keys)
 const SHOPIFY_COL_ORDER = [
   'handle',
+  'command',
   'title',
   'body_html',
   'vendor',
   'category', 'product_category',
   'product_type',
   'tags',
+  'tags_command',
   'published',
   'option1_name', 'option1',
   'option2_name', 'option2',
@@ -78,6 +81,7 @@ const SHOPIFY_COL_ORDER = [
   'seo_description',
   'variant_image',
   'weight_unit',
+  'country_of_origin', 'variant_country_of_origin', 'origin_country',
   'tax_code',
   'cost_per_item',
   'status',
@@ -267,7 +271,6 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
   const editedMapRef = useRef<Record<string, Set<string>>>({})
   const [tooltip,     setTooltip]     = useState<TooltipState | null>(null)
   const [retryingRows,setRetryingRows]= useState<Set<string>>(new Set())
-  const [showToast,   setShowToast]   = useState(false)
 
   const totalEdited = useMemo(
     () => Object.values(editedMap).reduce((s, cols) => s + cols.size, 0),
@@ -420,13 +423,10 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
     onSave(edited)
     editedMapRef.current = {}
     setEditedMap({})
-    setShowToast(true)
-    setTimeout(() => setShowToast(false), 2000)
   }
 
   function handleReset() {
     if (!apiRef.current) return
-    // Build fresh flat rows from original GridRow data — avoids direct mutation
     const restored: FlatRow[] = []
     apiRef.current.forEachNode((node) => {
       if (node.data) restored.push(toFlatRow((node.data as FlatRow).__meta))
@@ -434,6 +434,7 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
     apiRef.current.applyTransaction({ update: restored })
     editedMapRef.current = {}
     setEditedMap({})
+    toast.info('Changes reset to original values')
   }
 
   const getRowId = useCallback((p: GetRowIdParams<FlatRow>) => p.data.__id, [])
@@ -659,14 +660,6 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
             <Save className="w-3.5 h-3.5" />
             Save Changes ({totalEdited} edited)
           </button>
-        </div>
-      )}
-
-      {/* Save success toast */}
-      {showToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl bg-emerald-600 text-white text-sm font-medium shadow-lg shadow-emerald-500/30 flex items-center gap-2 pointer-events-none">
-          <span className="w-4 h-4 rounded-full border-2 border-white flex items-center justify-center text-xs">✓</span>
-          Changes saved successfully
         </div>
       )}
 
