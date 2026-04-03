@@ -42,14 +42,24 @@ export default function MergedJobView() {
 
   // ── Load job + rows ─────────────────────────────────────────────────────────
   const loadData = useCallback(async (id: string) => {
-    const [jobData, p0, p1, p2, p3] = await Promise.all([
+    const PAGE = 500
+    // Fetch job metadata and first page together
+    const [jobData, firstPage] = await Promise.all([
       mergedApi.get(id),
-      mergedApi.getRows(id, { skip: 0,    limit: 500 }),
-      mergedApi.getRows(id, { skip: 500,  limit: 500 }),
-      mergedApi.getRows(id, { skip: 1000, limit: 500 }),
-      mergedApi.getRows(id, { skip: 1500, limit: 500 }),
+      mergedApi.getRows(id, { skip: 0, limit: PAGE }),
     ])
-    return { jobData, rows: [...p0, ...p1, ...p2, ...p3] }
+    const total = jobData.totalRows
+    // Only fetch additional pages if there are more rows beyond the first page
+    let rows = firstPage
+    if (total > PAGE) {
+      const offsets: number[] = []
+      for (let skip = PAGE; skip < total; skip += PAGE) offsets.push(skip)
+      const rest = await Promise.all(
+        offsets.map((skip) => mergedApi.getRows(id, { skip, limit: PAGE }))
+      )
+      rows = [firstPage, ...rest].flat()
+    }
+    return { jobData, rows }
   }, [])
 
   useEffect(() => {
@@ -148,7 +158,7 @@ export default function MergedJobView() {
   if (!job) return null
 
   return (
-    <div ref={pageRef} className="flex flex-col h-full">
+    <div ref={pageRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-black/5 dark:border-white/5">
@@ -270,7 +280,7 @@ export default function MergedJobView() {
           </div>
 
           {/* Grid */}
-          <div className="flex-1 min-h-0">
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden px-4 pb-4">
             {viewMode === 'table'
               ? <ExcelGrid rows={gridRows} onSave={handleSave} />
               : <ShopifyCsvView rows={gridRows} />}

@@ -201,15 +201,25 @@ export function exportToShopifyCSV(rawRows: FailedRow[], filename: string) {
   document.body.removeChild(a); URL.revokeObjectURL(url)
 }
 
-// ── Fetch rows (4 pages × 500) ────────────────────────────────────────────────
+// ── Fetch rows — first page reveals total, then fetches remaining pages in parallel
+const BATCH_PAGE_SIZE = 500
 async function fetchBatch(jobIds: string[], filter: 'all' | 'correct' | 'failed'): Promise<FailedRow[]> {
-  const pages = await Promise.all([
-    migrationApi.batchRows(jobIds, filter, 0,    500),
-    migrationApi.batchRows(jobIds, filter, 500,  500),
-    migrationApi.batchRows(jobIds, filter, 1000, 500),
-    migrationApi.batchRows(jobIds, filter, 1500, 500),
-  ])
-  return pages.flat()
+  // First call: get page 0 + discover total_rows
+  const first = await migrationApi.batchRows(jobIds, filter, 0, BATCH_PAGE_SIZE)
+  const total = first.totalRows
+
+  // No additional pages needed
+  if (total <= BATCH_PAGE_SIZE) return first.rows
+
+  // Calculate remaining pages and fetch them in parallel
+  const offsets: number[] = []
+  for (let skip = BATCH_PAGE_SIZE; skip < total; skip += BATCH_PAGE_SIZE) {
+    offsets.push(skip)
+  }
+  const rest = await Promise.all(
+    offsets.map((skip) => migrationApi.batchRows(jobIds, filter, skip, BATCH_PAGE_SIZE))
+  )
+  return [first.rows, ...rest.map((p) => p.rows)].flat()
 }
 
 // ── Saved merge card ──────────────────────────────────────────────────────────
@@ -397,11 +407,11 @@ export default function BatchExport() {
     setNewStep('select'); setSaveOpen(false)
   }
 
-  if (loadingJobs) return <PageLoader label="Loading jobs…" />
-
   // ── SHARED SHELL ───────────────────────────────────────────────────────────
   return (
     <div ref={pageRef} className="flex flex-col h-screen px-4 sm:px-8 py-4 sm:py-8 overflow-hidden">
+      {loadingJobs && <PageLoader label="Loading jobs…" />}
+      {!loadingJobs && (<>
 
       {/* Back */}
       <button
@@ -544,7 +554,7 @@ export default function BatchExport() {
               )}
             </div>
             {/* Action bar */}
-            <div className="flex items-center gap-3 mt-4 flex-shrink-0 pt-4 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-3 mt-4 flex-shrink-0 pt-4 border-t" style={{ borderColor: 'var(--border-end)' }}>
               <span className="text-xs text-slate-400 mr-auto">
                 {selected.size === 0 ? 'Select jobs above to merge' : `${selected.size} job${selected.size !== 1 ? 's' : ''} · ${totalRows} rows`}
               </span>
@@ -569,11 +579,11 @@ export default function BatchExport() {
               <span className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
                 <Hash className="w-3.5 h-3.5" /><b className="text-slate-800 dark:text-slate-200">{previewRows.length}</b> rows
               </span>
-              <span className="hidden sm:inline text-slate-200 dark:text-slate-700">|</span>
+              <span className="hidden sm:inline w-px h-3 rounded-full self-center" style={{ backgroundColor: 'var(--border-end)' }} />
               <span className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /><b>{previewCorrect}</b> correct
               </span>
-              <span className="hidden sm:inline text-slate-200 dark:text-slate-700">|</span>
+              <span className="hidden sm:inline w-px h-3 rounded-full self-center" style={{ backgroundColor: 'var(--border-end)' }} />
               <span className="flex items-center gap-1.5 text-xs text-rose-700 dark:text-rose-400">
                 <XCircle className="w-3.5 h-3.5 text-rose-500" /><b>{previewFailed}</b> failed
               </span>
@@ -599,7 +609,7 @@ export default function BatchExport() {
             </div>
 
             {/* Action bar */}
-            <div className="flex items-center gap-3 mt-4 flex-shrink-0 pt-4 border-t border-slate-100 dark:border-slate-800 flex-wrap">
+            <div className="flex items-center gap-3 mt-4 flex-shrink-0 pt-4 border-t flex-wrap" style={{ borderColor: 'var(--border-end)' }}>
 
               {/* Save to Library inline form */}
               {saveOpen ? (
@@ -695,6 +705,7 @@ export default function BatchExport() {
           </motion.div>
         )}
       </AnimatePresence>
+      </>)}
     </div>
   )
 }

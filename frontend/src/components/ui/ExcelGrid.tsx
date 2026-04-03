@@ -409,20 +409,25 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
 
   function handleSave() {
     if (!apiRef.current) return
+    // Always read from the ref — it is kept in sync with every cell edit
+    // and is never stale (unlike the React state which may lag one render).
+    const snapshot = editedMapRef.current
     const edited: GridRow[] = []
     apiRef.current.forEachNode((node) => {
       const flat = node.data as FlatRow
       const meta = flat.__meta
-      if (!editedMap[meta.id]) return
+      const editedCols = snapshot[meta.id]
+      if (!editedCols || editedCols.size === 0) return
       const updatedData = { ...meta.data }
-      for (const col of Array.from(editedMap[meta.id])) {
+      for (const col of Array.from(editedCols)) {
         updatedData[col] = String(flat[col] ?? '')
       }
       edited.push({ ...meta, data: updatedData, edited: true })
     })
-    onSave(edited)
+    if (edited.length === 0) return
     editedMapRef.current = {}
     setEditedMap({})
+    onSave(edited)
   }
 
   function handleReset() {
@@ -683,7 +688,6 @@ export default function ExcelGrid({ rows, onSave, onRetryRow }: ExcelGridProps) 
           </div>
         )
       })()}
-  ``
     </div>
   )
 }

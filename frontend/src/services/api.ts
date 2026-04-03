@@ -374,13 +374,23 @@ export const migrationApi = {
     filter: 'all' | 'correct' | 'failed',
     skip = 0,
     limit = 500,
-  ): Promise<FailedRow[]> {
+  ): Promise<{ rows: FailedRow[]; totalRows: number }> {
     const suffix = filter === 'correct' ? '/correct' : filter === 'failed' ? '/failed' : ''
-    const rows = await request<Record<string, unknown>[]>(
+    const res = await request<Record<string, unknown>>(
       `/api/v1/migration/batch${suffix}`,
       { method: 'POST', body: JSON.stringify({ job_ids: jobIds, skip, limit }) },
     )
-    return rows.map((row, idx) => mapRow(row, skip + idx + 1))
+    // Backend returns { jobs, total_rows, returned_rows, rows, ... }
+    const rawRows: Record<string, unknown>[] = Array.isArray(res.rows)
+      ? (res.rows as Record<string, unknown>[])
+      : Array.isArray(res)
+        ? (res as unknown as Record<string, unknown>[])
+        : []
+    const totalRows = (res.total_rows as number) ?? rawRows.length
+    return {
+      rows: rawRows.map((row, idx) => mapRow(row, skip + idx + 1)),
+      totalRows,
+    }
   },
 
   async aiRetry(rowId: string): Promise<void> {
